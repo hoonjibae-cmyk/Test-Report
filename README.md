@@ -47,7 +47,38 @@ python -m omr.cli score --image scan.png \
 
 # 4) 파이프라인 자체검증 (스캐너 없이 전체 흐름 확인)
 python -m omr.cli selftest --out output
+
+# 5) 스캔 폴더 일괄 처리 → 채점 + 웹링크 성적표 일괄 생성
+python -m omr.cli batch \
+    --scans scans/ --template output/MID2026_template.json \
+    --key examples/answer_key.json \
+    --exam MID2026 --title "1학기 중간고사" --date "2026-04-28" \
+    --school "한빛중학교 3-2" --roster examples/students.json \
+    --base-url "https://reports.school.kr/mid2026" \
+    --salt "여기에-비공개-고정값" --out output
+
+# 6) 생성된 성적표 로컬 미리보기
+python -m omr.cli serve --dir output/reports/MID2026 --port 8000
 ```
+
+## 웹링크 형식 성적표
+
+성적표는 **응시자별 자체완결형(single-file) HTML**로 생성됩니다. 각 파일명은
+추측 불가능한 토큰(`{20자리 hex}.html`)이라, 정적 호스팅(S3·Netlify·GitHub Pages·
+학교 서버 등) 어디에 올려도 **링크만으로 안전하게 열람**됩니다. 모바일 우선 디자인이라
+학부모가 폰에서 바로 봅니다.
+
+- **링크 안정성**: 토큰은 `(salt, 시험코드, 학번)`으로 결정론적 파생 → 재생성해도
+  동일 응시자의 링크가 바뀌지 않습니다(알림톡 발송 후에도 유효). **운영 시 `--salt`를
+  반드시 비공개 고정값으로 지정**하세요(토큰 추측 방지).
+- **성적표 내용**: 점수·등급·백분위·석차, 반 평균 대비 막대, 문항별 O/X/무응답 표,
+  판독 검수 안내(이중표기·무응답 시).
+- **`manifest.json`**: `학번·이름·점수·석차·링크(url)` 목록. **다음 단계 알림톡 발송의
+  입력**이 됩니다(링크 변수로 사용).
+- **`index.html`**(교사용): 전체 응시자 링크 목록. **`results.csv`**: 채점 결과표.
+
+`batch` 대신, 이미 판독·집계한 데이터가 있으면 `report --records records.json` 으로
+성적표만 생성할 수 있습니다.
 
 ### 응시자별 시트 생성
 `--students students.json` 으로 응시자별 QR(사전 배정 학번)을 넣은 시트를 만듭니다.
@@ -75,9 +106,11 @@ python -m omr.cli selftest --out output
 | `omr/generator.py` | PDF·미리보기 PNG·템플릿 JSON·ArUco·QR 생성 |
 | `omr/reader.py`    | 마커 검출→원근보정→이진화→채움률→마킹 판정 |
 | `omr/scorer.py`    | 정답 대조 채점 + 평균·표준편차·석차·백분위 |
+| `omr/report_web.py`| 웹링크 형식 HTML 성적표 + manifest 생성(토큰 링크) |
+| `omr/batch.py`     | 스캔 폴더 일괄 판독→채점→웹성적표 |
 | `omr/simulate.py`  | 스캐너 없이 가상 마킹·왜곡으로 스캔본 생성(검증용) |
 | `omr/selftest.py`  | 생성→마킹→판독 전체 자체검증 |
-| `omr/cli.py`       | `generate` / `read` / `score` / `selftest` CLI |
+| `omr/cli.py`       | `generate`/`read`/`score`/`batch`/`report`/`serve`/`selftest` CLI |
 
 ## 판독 파라미터 튜닝
 `ReadParams`(또는 `--threshold`)로 조정합니다.
@@ -93,9 +126,10 @@ python tests/test_pipeline.py     # 또는  python -m pytest tests/ -v
 ```
 
 ## 로드맵 (다음 단계)
-1. **[완료] 생성 + 판독 + 채점 MVP** — 본 저장소
-2. **성적표 출력** — 시험별 양식(엑셀/HTML) 템플릿 바인딩, 개인별 PDF 일괄 출력
-3. **학부모 알림톡** — 승인 템플릿 변수 치환 + 발송대행사 API 배치 발송
+1. **[완료] 생성 + 판독 + 채점 MVP**
+2. **[완료] 웹링크 형식 성적표** — 응시자별 토큰 HTML + manifest + 교사용 목록/CSV
+3. **학부모 알림톡** — manifest의 링크를 승인 템플릿 변수에 치환하여 발송대행사
+   API로 배치 발송
    *(선행 필요: 카카오 비즈니스 채널 개설, 발송대행사 계약, 템플릿 사전 심사)*
 
 ## 운영 팁 (정확도 극대화)

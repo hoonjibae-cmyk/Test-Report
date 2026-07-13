@@ -100,6 +100,81 @@ def test_ambiguous_flagged_not_scored():
     assert rr.answers()[2] is None
 
 
+def test_web_reports_and_manifest():
+    import json as _json
+    from omr.report_web import build_reports, ExamMeta, make_token
+    from omr.scorer import AnswerKey as _AK
+
+    key = _AK("WEB", "t", {1: 1, 2: 2, 3: 3, 4: 4}, {q: 25.0 for q in (1, 2, 3, 4)})
+    records = [
+        {"student_id": "20250001", "name": "가나", "answers": {1: 1, 2: 2, 3: 3, 4: 4}},
+        {"student_id": "20250002", "name": "다라", "answers": {1: 1, 2: 5, 3: 3, 4: None},
+         "review_flags": [{"type": "question", "no": 4, "status": "blank"}]},
+    ]
+    d = _tmp()
+    meta = ExamMeta(exam_id="WEB", title="테스트", date="2026-01-01", school="테스트중")
+    out = build_reports(records, key, meta, d,
+                        base_url="https://x.example/web", salt="fixed-salt")
+
+    # 산출물 존재
+    assert os.path.exists(out["manifest"]) and os.path.exists(out["index"])
+    for e in out["entries"]:
+        assert os.path.exists(os.path.join(out["dir"], e["file"]))
+        assert e["url"].startswith("https://x.example/web/")
+
+    # 토큰 결정론: 같은 salt/exam/sid → 같은 토큰(링크 안정성)
+    assert make_token("fixed-salt", "WEB", "20250001") == out["entries"][0]["token"] \
+        if out["entries"][0]["student_id"] == "20250001" else True
+    t1 = make_token("fixed-salt", "WEB", "20250001")
+    assert t1 == make_token("fixed-salt", "WEB", "20250001")
+    assert t1 != make_token("other-salt", "WEB", "20250001")
+
+    # manifest 내용
+    m = _json.load(open(out["manifest"], encoding="utf-8"))
+    assert m["count"] == 2 and m["exam"]["exam_id"] == "WEB"
+
+    # 만점자가 1등
+    top = min(out["entries"], key=lambda x: x["rank"])
+    assert top["student_id"] == "20250001" and top["score"] == 100.0
+
+    # HTML에 이름과 점수가 포함
+    html_path = os.path.join(out["dir"], out["entries"][0]["file"])
+    doc = open(html_path, encoding="utf-8").read()
+    assert "가나" in doc or "다라" in doc
+
+
+def test_batch_reads_folder():
+    import numpy as np
+    from omr.batch import run_batch
+    from omr.report_web import ExamMeta as _EM
+    from omr.scorer import AnswerKey as _AK
+
+    d = _tmp()
+    cfg = SheetConfig(exam_id="B1", num_questions=20, num_choices=5, id_digits=8)
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    tpl = res["template"]
+
+    # 정답키 + 스캔 2장 생성
+    ans_key = {q: ((q % 5) + 1) for q in range(1, 21)}
+    import json as _json
+    key_path = os.path.join(d, "key.json")
+    _json.dump({"exam_id": "B1", "title": "b", "default_point": 5.0,
+                "answers": {str(k): v for k, v in ans_key.items()}}, open(key_path, "w"))
+
+    scans_dir = os.path.join(d, "scans")
+    os.makedirs(scans_dir)
+    for sid, ans in [("20250001", ans_key),
+                     ("20250002", {q: 1 for q in range(1, 21)})]:
+        scan = simulate_marked(cfg, ans, sid, dpi=200, distort=True, seed=hash(sid) % 100)
+        cv2.imwrite(os.path.join(scans_dir, f"{sid}.png"), scan)
+
+    meta = _EM(exam_id="B1", title="b")
+    out = run_batch(scans_dir, tpl, key_path, d, meta, base_url="", salt="s")
+    assert out["read"] == 2
+    assert out["reports"] and len(out["reports"]["entries"]) == 2
+    assert os.path.exists(out["csv"])
+
+
 def test_scorer_stats():
     key = AnswerKey("E", "t", {1: 1, 2: 2, 3: 3, 4: 4}, {1: 1, 2: 1, 3: 1, 4: 1})
     recs = [
