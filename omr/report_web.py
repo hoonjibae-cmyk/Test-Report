@@ -37,158 +37,229 @@ class ExamMeta:
 
 # ----------------------------------------------------------------------------
 # HTML 렌더링 (자체완결형, 모바일 우선)
-# ----------------------------------------------------------------------------
+# 목동유쌤영어학원 리포트 톤앤매너(네이비+골드)를 따른 디자인 토큰.
+# 여러 성적표 유형이 이 토큰/컴포넌트 CSS를 공유하도록 별도 함수로 분리한다.
+REPORT_CSS = """
+  :root{
+    --navy:#183c73; --navy-deep:#102b55; --blue:#2f67b1; --blue-soft:#eaf2fb;
+    --gold:#d2a93b; --gold-soft:#fff8df; --ink:#172033; --muted:#667085;
+    --line:#d9e0ea; --surface:#ffffff; --bg:#f3f6fa;
+    --success:#13795b; --success-soft:#e8f7f1; --danger:#dc2626; --danger-deep:#b91c1c;
+    --danger-soft:#fee2e2; --warn:#a35f00; --warn-soft:#fff7e6;
+    --shadow:0 18px 50px rgba(18,44,84,.11); --radius:18px;
+  }
+  *{ box-sizing:border-box; }
+  .omr-report{ margin:0; min-height:100vh; color:var(--ink); background:var(--bg);
+    font-family:Pretendard,"Pretendard Variable","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",Arial,sans-serif;
+    line-height:1.55; -webkit-font-smoothing:antialiased;
+    padding:22px 14px 48px; font-variant-numeric:tabular-nums; }
+  .doc{ width:min(760px,100%); margin:0 auto; background:#fff; border-radius:6px;
+    box-shadow:var(--shadow); overflow:hidden; border-top:8px solid var(--navy); }
+  .hero{ padding:24px 26px 0; }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand-mark{ width:42px; height:42px; border-radius:13px; display:grid; place-items:center;
+    background:linear-gradient(145deg,var(--navy),var(--blue)); color:#fff; font-weight:900;
+    font-size:20px; box-shadow:0 8px 18px rgba(24,60,115,.22); }
+  .brand strong{ font-size:16px; letter-spacing:-.02em; display:block; }
+  .brand span{ color:var(--muted); font-size:12px; }
+  .title-block{ margin:20px 0 16px; }
+  .title-block .eyebrow{ margin:0 0 5px; color:var(--blue); font-weight:850; font-size:11px; letter-spacing:.13em; }
+  .title-block h1{ margin:0; font-size:26px; letter-spacing:-.04em; line-height:1.2; text-wrap:balance; }
+  .title-block .band{ display:inline-block; margin-top:10px; padding:4px 13px; border-radius:99px;
+    font-size:12px; font-weight:800; }
+  .strip{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; background:var(--navy);
+    color:#fff; border-radius:12px 12px 0 0; overflow:hidden; }
+  .strip>div{ padding:14px 16px; border-right:1px solid rgba(255,255,255,.15); }
+  .strip>div:last-child{ border-right:0; }
+  .strip span{ display:block; color:#c8d9ec; font-size:11px; }
+  .strip strong{ display:block; margin-top:3px; font-size:15px; letter-spacing:-.02em; }
+  .body{ padding:24px 26px 28px; display:flex; flex-direction:column; gap:18px; }
+  .review{ padding:13px 16px; border-radius:12px; background:var(--warn-soft);
+    border:1px solid #f4dca6; color:#6f4a0a; font-size:13px; }
+  .review strong{ color:var(--warn); }
+  .kpis{ display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr; border:1px solid #d9e2ed;
+    border-radius:13px; overflow:hidden; }
+  .kpis>div{ padding:16px; border-right:1px solid #e2e8f0; min-height:88px; }
+  .kpis>div:last-child{ border-right:0; }
+  .kpis span{ display:block; color:var(--muted); font-size:11px; }
+  .kpis strong{ display:block; margin-top:5px; font-size:22px; color:var(--navy); letter-spacing:-.03em; }
+  .kpis small{ color:var(--muted); font-size:10px; }
+  .kpis .emph{ background:var(--navy); color:#fff; }
+  .kpis .emph span,.kpis .emph small{ color:#c8d8eb; }
+  .kpis .emph strong{ display:inline; color:#fff; font-size:36px; }
+  .kpis .emph small{ margin-left:3px; }
+  .panel{ border:1px solid #dce4ee; border-radius:13px; padding:18px; background:#fff; }
+  .panel-title{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:14px; }
+  .panel-title h4{ margin:0; font-size:15px; letter-spacing:-.02em; }
+  .panel-title span{ color:var(--muted); font-size:12px; }
+  .bar-row+.bar-row{ margin-top:12px; }
+  .bar-label{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:5px; font-size:12px; }
+  .bar-label strong{ font-weight:700; }
+  .bar-label span{ color:var(--muted); }
+  .bar-track{ height:9px; background:#e9eef5; border-radius:99px; overflow:hidden; }
+  .bar-track i{ height:100%; display:block; border-radius:inherit;
+    background:linear-gradient(90deg,var(--navy),var(--blue)); }
+  .bar-track.avg i{ background:linear-gradient(90deg,#9aa8bd,#c2ccdb); }
+  .qgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(52px,1fr)); gap:6px; }
+  .qcell{ min-height:48px; border:1px solid #dce3ec; border-radius:8px; display:flex;
+    flex-direction:column; align-items:center; justify-content:center; }
+  .qcell span{ font-size:10px; color:var(--muted); }
+  .qcell strong{ font-size:18px; line-height:1.1; }
+  .qcell.correct{ background:var(--success-soft); border-color:#b9e4d5; color:var(--success); }
+  .qcell.correct span{ color:#4f9e86; }
+  .qcell.wrong{ background:var(--danger); border-color:var(--danger-deep); color:#fff;
+    box-shadow:0 2px 7px rgba(185,28,28,.22); }
+  .qcell.wrong span{ color:#fee2e2; }
+  .qcell.blank{ background:#f4f5f7; color:#98a2b3; }
+  .legend{ font-size:11px; color:var(--muted); margin-top:12px; display:flex; gap:6px;
+    flex-wrap:wrap; justify-content:space-between; }
+  .footer{ padding:18px 26px; border-top:1px solid var(--line); background:#fafbfd;
+    display:flex; align-items:center; gap:14px; }
+  .footer .brand-mark{ width:30px; height:30px; border-radius:9px; font-size:15px; }
+  .footer strong{ font-size:13px; }
+  .footer p{ margin:0; color:var(--muted); font-size:11px; }
+  @media (max-width:560px){
+    .hero{ padding:20px 16px 0; }
+    .body{ padding:18px 16px 22px; }
+    .title-block h1{ font-size:22px; }
+    .strip{ grid-template-columns:1fr 1fr; }
+    .strip>div:nth-child(2){ border-right:0; }
+    .strip>div:nth-child(-n+2){ border-bottom:1px solid rgba(255,255,255,.15); }
+    .kpis{ grid-template-columns:1fr 1fr; }
+    .kpis>div{ border-right:1px solid #e2e8f0 !important; border-bottom:1px solid #e2e8f0; }
+    .kpis>div:nth-child(2n){ border-right:0 !important; }
+    .kpis .emph{ grid-column:1 / -1; }
+  }
+"""
+
+
 def _grade_band(percentile: float) -> tuple:
-    """백분위 → (등급 라벨, 색)."""
+    """백분위 → (성취 수준 라벨, 글자색, 배경색)."""
     if percentile >= 89:
-        return "상위권", "#16a34a"
+        return "최상위권", "#0f5f47", "var(--success-soft)"
     if percentile >= 60:
-        return "중상위권", "#0284c7"
+        return "상위권", "#1b3f78", "var(--blue-soft)"
     if percentile >= 40:
-        return "중위권", "#ca8a04"
-    return "노력 필요", "#dc2626"
+        return "중위권", "#8a5a00", "var(--gold-soft)"
+    return "집중 보완 권장", "#9a2020", "var(--danger-soft)"
 
 
-def _distribution_svg(raw: float, mean: float, std: float, total: float) -> str:
-    """내 점수 vs 반 평균을 보여주는 간단한 막대 SVG."""
-    w, h = 320, 96
-    pad = 8
-    bw = w - 2 * pad
-
-    def x(v):
-        return pad + bw * (max(0.0, min(1.0, v / total if total else 0)))
-
-    my_x = x(raw)
-    mean_x = x(mean)
-    return f"""<svg viewBox="0 0 {w} {h}" width="100%" style="max-width:360px">
-  <rect x="{pad}" y="40" width="{bw}" height="14" rx="7" fill="#e5e7eb"/>
-  <rect x="{pad}" y="40" width="{my_x-pad}" height="14" rx="7" fill="#2563eb"/>
-  <line x1="{mean_x}" y1="32" x2="{mean_x}" y2="62" stroke="#dc2626" stroke-width="2" stroke-dasharray="3 2"/>
-  <text x="{my_x}" y="30" font-size="11" fill="#2563eb" text-anchor="middle">내 {raw:g}</text>
-  <text x="{mean_x}" y="78" font-size="11" fill="#dc2626" text-anchor="middle">평균 {mean:g}</text>
-  <text x="{pad}" y="78" font-size="10" fill="#9ca3af">0</text>
-  <text x="{w-pad}" y="78" font-size="10" fill="#9ca3af" text-anchor="end">{total:g}</text>
-</svg>"""
+def _bar(label: str, value: float, total: float, detail: str, avg: bool = False) -> str:
+    pct = max(0.0, min(100.0, (value / total * 100) if total else 0))
+    cls = "bar-track avg" if avg else "bar-track"
+    return (f'<div class="bar-row"><div class="bar-label"><strong>{html.escape(label)}</strong>'
+            f'<span>{html.escape(detail)}</span></div>'
+            f'<div class="{cls}"><i style="width:{pct:.1f}%"></i></div></div>')
 
 
 def _question_cells(questions: list) -> str:
+    sym = {"correct": "○", "wrong": "×", "blank": "–"}
     cells = []
-    sym = {"correct": ("O", "#16a34a", "#dcfce7"),
-           "wrong": ("X", "#dc2626", "#fee2e2"),
-           "blank": ("–", "#6b7280", "#f3f4f6")}
     for q in questions:
-        s, color, bg = sym[q["status"]]
         mine = q["mine"] if q["mine"] is not None else "무응답"
+        tip = f'{q["no"]}번 · 내 답 {mine} / 정답 {q["correct"]} · {q["point"]:g}점'
         cells.append(
-            f'<div class="qcell" style="background:{bg}">'
-            f'<div class="qno">{q["no"]}</div>'
-            f'<div class="qmark" style="color:{color}">{s}</div>'
-            f'<div class="qdet">내 {mine} / 정답 {q["correct"]}</div>'
-            f'</div>'
+            f'<div class="qcell {q["status"]}" title="{html.escape(tip)}">'
+            f'<span>{q["no"]}</span><strong>{sym[q["status"]]}</strong></div>'
         )
     return "".join(cells)
 
 
-def render_report_html(meta: ExamMeta, student: dict, result: dict,
+def render_report_body(meta: ExamMeta, student: dict, result: dict,
                        questions: list, review_flags: list) -> str:
-    band, band_color = _grade_band(result["percentile"])
+    """성적표 본문(.omr-report 래퍼)을 반환. 단독 HTML과 아티팩트가 함께 사용."""
+    band, band_ink, band_bg = _grade_band(result["percentile"])
     name = html.escape(student.get("name") or "")
     sid = html.escape(str(student.get("student_id") or ""))
+    title = html.escape(meta.title)
+    school = html.escape(meta.school) or "OMR 채점 리포트"
+    date = html.escape(meta.date) or ""
+    mark = (student.get("name") or school or "R")[0]
+
     review_html = ""
     if review_flags:
         items = ", ".join(
-            (f"{f.get('no','')}번" if f.get("type") == "question" else f"학번 {f.get('col','')+1}자리")
-            + f"({'중복표기' if f['status']=='multiple' else '무응답'})"
+            (f"{f.get('no','')}번" if f.get("type") == "question" else f"학번 {f.get('col', 0) + 1}자리")
+            + f"({'중복표기' if f['status'] == 'multiple' else '무응답'})"
             for f in review_flags
         )
         review_html = (
-            f'<div class="review">⚠️ 판독 시 확인이 필요한 항목이 있어 담당 교사가 검수했습니다: {items}</div>'
+            f'<div class="review"><strong>⚠️ 판독 확인</strong> — 아래 항목은 마킹이 '
+            f'모호하여 담당 교사가 직접 검수했습니다: {html.escape(items)}</div>'
         )
 
-    dist = _distribution_svg(result["raw_score"], result["class_mean"],
-                             result["class_std"], result["total_points"])
+    bars = (
+        _bar("학생 점수", result["raw_score"], result["total_points"],
+             f'{result["raw_score"]:g}점') +
+        _bar("반 평균", result["class_mean"], result["total_points"],
+             f'{result["class_mean"]:g}점 · 표준편차 {result["class_std"]:g}', avg=True)
+    )
     qcells = _question_cells(questions)
-    title = html.escape(meta.title)
-    school = html.escape(meta.school)
-    date = html.escape(meta.date)
 
+    return f"""<div class="omr-report"><article class="doc">
+  <header class="hero">
+    <div class="brand">
+      <div class="brand-mark">{html.escape(mark)}</div>
+      <div><strong>{school}</strong><span>OMR 정밀 채점 리포트</span></div>
+    </div>
+    <div class="title-block">
+      <p class="eyebrow">STUDENT SCORE REPORT</p>
+      <h1>{title}</h1>
+      <span class="band" style="color:{band_ink};background:{band_bg}">{band} · 백분위 {result['percentile']:g}</span>
+    </div>
+    <div class="strip">
+      <div><span>학생명</span><strong>{name or '—'}</strong></div>
+      <div><span>학번</span><strong>{sid or '—'}</strong></div>
+      <div><span>응시 인원</span><strong>{result['class_size']}명</strong></div>
+      <div><span>발행일</span><strong>{date or '—'}</strong></div>
+    </div>
+  </header>
+
+  <div class="body">
+    {review_html}
+
+    <div class="kpis">
+      <div class="emph"><span>원점수</span><strong>{result['raw_score']:g}</strong><small>/ {result['total_points']:g}점</small></div>
+      <div><span>학원 내 석차</span><strong>{result['rank']}위</strong><small>{result['class_size']}명 중</small></div>
+      <div><span>전체 백분위</span><strong>{result['percentile']:g}</strong><small>상위 추정</small></div>
+      <div><span>정답 문항</span><strong>{result['num_correct']}개</strong><small>{len(questions)}문항 중</small></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-title"><h4>점수 비교</h4><span>{result['total_points']:g}점 만점</span></div>
+      {bars}
+    </section>
+
+    <section class="panel">
+      <div class="panel-title"><h4>문항별 정오답</h4><span>○ 정답 · × 오답 · – 미입력</span></div>
+      <div class="qgrid">{qcells}</div>
+      <div class="legend"><span>마우스를 올리면 문항별 내 답·정답·배점을 볼 수 있습니다.</span>
+        <span>정답 {result['num_correct']} · 오답 {result['num_wrong']} · 미입력 {result['num_blank']}</span></div>
+    </section>
+  </div>
+
+  <footer class="footer">
+    <div class="brand-mark">{html.escape(mark)}</div>
+    <div><strong>{school}</strong>
+      <p>본 성적표는 개인 열람용 링크입니다. 백분위는 응시 집단 기준 참고값이며 링크 공유에 유의해 주세요.</p></div>
+  </footer>
+</article></div>"""
+
+
+def render_report_html(meta: ExamMeta, student: dict, result: dict,
+                       questions: list, review_flags: list) -> str:
+    """단독 열람용 완성 HTML 문서."""
+    body = render_report_body(meta, student, result, questions, review_flags)
+    title = html.escape(meta.title)
+    name = html.escape(student.get("name") or "")
     return f"""<!doctype html>
 <html lang="ko"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>{title} 성적표 - {name}</title>
-<style>
-  :root {{ --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --sub:#64748b; --line:#e2e8f0; --brand:#2563eb; }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{ --bg:#0b1220; --card:#111a2e; --ink:#e5edff; --sub:#94a3b8; --line:#1e293b; }}
-  }}
-  * {{ box-sizing:border-box; }}
-  body {{ margin:0; background:var(--bg); color:var(--ink);
-    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-    line-height:1.5; -webkit-text-size-adjust:100%; }}
-  .wrap {{ max-width:520px; margin:0 auto; padding:16px 14px 40px; }}
-  .card {{ background:var(--card); border:1px solid var(--line); border-radius:16px;
-    padding:18px 16px; margin-bottom:14px; }}
-  .head .school {{ font-size:13px; color:var(--sub); }}
-  .head h1 {{ font-size:20px; margin:2px 0 4px; }}
-  .head .date {{ font-size:12px; color:var(--sub); }}
-  .who {{ display:flex; justify-content:space-between; align-items:baseline; margin-top:10px; }}
-  .who .name {{ font-size:18px; font-weight:700; }}
-  .who .sid {{ font-size:13px; color:var(--sub); }}
-  .score {{ text-align:center; padding:10px 0 4px; }}
-  .score .big {{ font-size:52px; font-weight:800; color:var(--brand); line-height:1; }}
-  .score .big small {{ font-size:20px; color:var(--sub); font-weight:600; }}
-  .band {{ display:inline-block; margin-top:8px; padding:3px 12px; border-radius:999px;
-    color:#fff; font-size:13px; font-weight:700; }}
-  .stats {{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:14px; }}
-  .stat {{ background:var(--bg); border-radius:12px; padding:10px 6px; text-align:center; }}
-  .stat b {{ display:block; font-size:19px; }}
-  .stat span {{ font-size:11px; color:var(--sub); }}
-  .sec-title {{ font-size:14px; font-weight:700; margin:2px 0 10px; }}
-  .qgrid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:6px; }}
-  .qcell {{ border-radius:10px; padding:6px 4px; text-align:center; }}
-  .qcell .qno {{ font-size:11px; color:var(--sub); }}
-  .qcell .qmark {{ font-size:20px; font-weight:800; line-height:1.1; }}
-  .qcell .qdet {{ font-size:10px; color:var(--sub); }}
-  .review {{ background:#fffbeb; color:#92400e; border:1px solid #fde68a; border-radius:12px;
-    padding:10px 12px; font-size:13px; margin-bottom:14px; }}
-  @media (prefers-color-scheme: dark) {{ .review {{ background:#3b2f0b; color:#fde68a; border-color:#78621d; }} }}
-  .foot {{ text-align:center; color:var(--sub); font-size:11px; margin-top:6px; }}
-  .legend {{ font-size:11px; color:var(--sub); margin-top:8px; }}
-</style></head>
-<body><div class="wrap">
-  <div class="card head">
-    <div class="school">{school}</div>
-    <h1>{title}</h1>
-    <div class="date">{date}</div>
-    <div class="who"><span class="name">{name}</span><span class="sid">{sid}</span></div>
-  </div>
-
-  {review_html}
-
-  <div class="card">
-    <div class="score">
-      <div class="big">{result['raw_score']:g}<small> / {result['total_points']:g}</small></div>
-      <div class="band" style="background:{band_color}">{band} · 백분위 {result['percentile']:g}</div>
-    </div>
-    <div class="stats">
-      <div class="stat"><b>{result['rank']}등</b><span>석차 (응시 {result['class_size']}명)</span></div>
-      <div class="stat"><b>{result['num_correct']}개</b><span>정답 (총 {len(questions)}문항)</span></div>
-      <div class="stat"><b>{result['class_mean']:g}</b><span>반 평균 (표준편차 {result['class_std']:g})</span></div>
-    </div>
-    <div style="margin-top:14px;text-align:center">{dist}</div>
-  </div>
-
-  <div class="card">
-    <div class="sec-title">문항별 채점 결과</div>
-    <div class="qgrid">{qcells}</div>
-    <div class="legend">O 정답 · X 오답 · – 무응답 &nbsp;|&nbsp;
-      정답 {result['num_correct']} · 오답 {result['num_wrong']} · 무응답 {result['num_blank']}</div>
-  </div>
-
-  <div class="foot">본 성적표는 개인 열람용 링크입니다. 링크 공유에 유의해 주세요.</div>
-</div></body></html>"""
+<style>{REPORT_CSS}</style></head>
+<body>{body}</body></html>"""
 
 
 # ----------------------------------------------------------------------------
