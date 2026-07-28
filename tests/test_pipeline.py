@@ -175,6 +175,61 @@ def test_batch_reads_folder():
     assert os.path.exists(out["csv"])
 
 
+def test_english_analysis_and_grade():
+    from omr.scorer import AnswerKey as _AK, english_analysis, compute_grade
+
+    assert compute_grade(90, [90, 80, 70]) == 1
+    assert compute_grade(85, [90, 80, 70]) == 2
+    assert compute_grade(10, [90, 80, 70]) == 4   # 마지막 컷 미만
+    assert compute_grade(50, []) is None
+
+    key = _AK(
+        exam_id="E", title="영어", subject="english",
+        answers={1: 1, 2: 2, 3: 3, 4: 4},
+        points={1: 25.0, 2: 25.0, 3: 25.0, 4: 25.0},
+        grade_cuts=[90, 80, 70, 60, 50],
+        qmeta={1: {"area": "듣기", "type": "목적", "difficulty": "하"},
+               2: {"area": "듣기", "type": "그림", "difficulty": "중"},
+               3: {"area": "독해", "type": "빈칸", "difficulty": "상"},
+               4: {"area": "독해", "type": "순서", "difficulty": "상"}},
+    )
+    # 듣기 2문항 모두 정답(50점), 독해 2문항 오답(0점) → 원점수 50 → 5등급
+    ans = {1: 1, 2: 2, 3: 5, 4: 5}
+    a = english_analysis(ans, key)
+    assert a["grade"] == 5
+    areas = {s["name"]: s for s in a["area_stats"]}
+    assert areas["듣기"]["rate"] == 100.0 and areas["독해"]["rate"] == 0.0
+    assert areas["듣기"]["correct"] == 2 and areas["독해"]["correct"] == 0
+    # 난이도 '상'은 전부 오답
+    diffs = {s["name"]: s["rate"] for s in a["difficulty_stats"]}
+    assert diffs["상"] == 0.0
+
+
+def test_english_report_build():
+    import json as _json
+    from omr.report_web import build_reports, ExamMeta
+    from omr.scorer import AnswerKey as _AK
+
+    key = _AK(
+        exam_id="ENG", title="영어모의", subject="english",
+        answers={q: 1 for q in range(1, 11)},
+        points={q: 10.0 for q in range(1, 11)},
+        grade_cuts=[90, 80, 70, 60, 50],
+        qmeta={q: {"area": "듣기" if q <= 5 else "독해",
+                   "type": f"유형{q}", "difficulty": "중"} for q in range(1, 11)},
+    )
+    records = [{"student_id": "20250001", "name": "홍길동",
+                "answers": {q: (1 if q <= 8 else 2) for q in range(1, 11)}}]  # 80점 → 2등급
+    d = _tmp()
+    meta = ExamMeta(exam_id="ENG", title="영어모의", school="테스트중", report_type="english")
+    out = build_reports(records, key, meta, d, salt="s")
+    e = out["entries"][0]
+    assert e["grade"] == 2
+    doc = open(os.path.join(out["dir"], e["file"]), encoding="utf-8").read()
+    assert "등급" in doc and "영역별 성취" in doc and "유형별 성취율" in doc
+    assert "Pretendard" in doc   # 폰트 링크 포함
+
+
 def test_scorer_stats():
     key = AnswerKey("E", "t", {1: 1, 2: 2, 3: 3, 4: 4}, {1: 1, 2: 1, 3: 1, 4: 1})
     recs = [

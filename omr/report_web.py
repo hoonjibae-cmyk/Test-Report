@@ -16,7 +16,7 @@ import json
 import os
 from dataclasses import dataclass
 
-from .scorer import AnswerKey, score_one, score_batch
+from .scorer import AnswerKey, score_one, score_batch, english_analysis
 
 
 DEFAULT_SALT = os.environ.get("OMR_REPORT_SALT", "omr-demo-salt-change-me")
@@ -33,6 +33,15 @@ class ExamMeta:
     title: str
     date: str = ""
     school: str = ""
+    report_type: str = "basic"   # "basic" | "english"
+
+
+# Pretendard 웹폰트 (실제 배포 시 로드; 아티팩트/오프라인은 폴백). 동적 서브셋 사용.
+PRETENDARD_LINK = (
+    '<link rel="stylesheet" '
+    'href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/'
+    'variable/pretendardvariable-dynamic-subset.min.css">'
+)
 
 
 # ----------------------------------------------------------------------------
@@ -50,7 +59,7 @@ REPORT_CSS = """
   }
   *{ box-sizing:border-box; }
   .omr-report{ margin:0; min-height:100vh; color:var(--ink); background:var(--bg);
-    font-family:Pretendard,"Pretendard Variable","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",Arial,sans-serif;
+    font-family:"Pretendard Variable",Pretendard,"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",Arial,sans-serif;
     line-height:1.55; -webkit-font-smoothing:antialiased;
     padding:22px 14px 48px; font-variant-numeric:tabular-nums; }
   .doc{ width:min(760px,100%); margin:0 auto; background:#fff; border-radius:6px;
@@ -118,6 +127,30 @@ REPORT_CSS = """
   .footer .brand-mark{ width:30px; height:30px; border-radius:9px; font-size:15px; }
   .footer strong{ font-size:13px; }
   .footer p{ margin:0; color:var(--muted); font-size:11px; }
+  /* 영어 모의고사 전용 */
+  .grade-badge{ display:flex; align-items:center; gap:14px; padding:18px 20px;
+    border-radius:14px; background:linear-gradient(135deg,var(--navy-deep),var(--blue));
+    color:#fff; box-shadow:0 10px 26px rgba(24,60,115,.2); }
+  .grade-badge .g-num{ font-size:44px; font-weight:900; line-height:1; letter-spacing:-.03em; }
+  .grade-badge .g-num small{ font-size:18px; font-weight:700; margin-left:2px; }
+  .grade-badge .g-meta span{ display:block; color:#c8d9ec; font-size:11px; }
+  .grade-badge .g-meta strong{ font-size:15px; }
+  .grade-badge .g-scale{ margin-left:auto; text-align:right; color:#c8d9ec; font-size:11px; }
+  .cat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .cat-grid .panel{ margin:0; }
+  .area-cards{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .area-card{ border:1px solid #d9e2ed; border-radius:13px; padding:16px; }
+  .area-card .a-top{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px; }
+  .area-card h5{ margin:0; font-size:14px; }
+  .area-card .a-rate{ font-size:20px; font-weight:800; color:var(--navy); }
+  .area-card .a-sub{ color:var(--muted); font-size:11px; margin-top:3px; }
+  .weak-note{ padding:12px 15px; border-radius:11px; background:var(--blue-soft);
+    border-left:4px solid var(--navy); color:#31465f; font-size:13px; }
+  .weak-note strong{ color:var(--navy); }
+  @media (max-width:560px){
+    .cat-grid,.area-cards{ grid-template-columns:1fr; }
+    .grade-badge .g-num{ font-size:38px; }
+  }
   @media (max-width:560px){
     .hero{ padding:20px 16px 0; }
     .body{ padding:18px 16px 22px; }
@@ -246,18 +279,159 @@ def render_report_body(meta: ExamMeta, student: dict, result: dict,
 </article></div>"""
 
 
+def _category_panel(title: str, sub: str, stats: list) -> str:
+    if not stats:
+        return ""
+    bars = "".join(
+        _bar(s["name"], s["rate"], 100.0,
+             f'{s["correct"]}/{s["count"]}문항 · {s["earned"]:g}/{s["possible"]:g}점 · {s["rate"]:g}%')
+        for s in stats
+    )
+    return (f'<section class="panel"><div class="panel-title"><h4>{html.escape(title)}</h4>'
+            f'<span>{html.escape(sub)}</span></div>{bars}</section>')
+
+
+def render_english_report_body(meta: ExamMeta, student: dict, result: dict,
+                               questions: list, review_flags: list, analysis: dict) -> str:
+    """영어 모의고사 전용 성적표 본문 (네이비 톤 공유 + 등급·영역·유형 분석)."""
+    name = html.escape(student.get("name") or "")
+    sid = html.escape(str(student.get("student_id") or ""))
+    title = html.escape(meta.title)
+    school = html.escape(meta.school) or "영어 모의고사 리포트"
+    date = html.escape(meta.date) or ""
+    mark = (student.get("name") or school or "E")[0]
+
+    review_html = ""
+    if review_flags:
+        items = ", ".join(
+            (f"{f.get('no','')}번" if f.get("type") == "question" else f"학번 {f.get('col', 0) + 1}자리")
+            + f"({'중복표기' if f['status'] == 'multiple' else '무응답'})"
+            for f in review_flags
+        )
+        review_html = (f'<div class="review"><strong>⚠️ 판독 확인</strong> — 마킹이 모호하여 '
+                       f'담당 교사가 직접 검수한 항목: {html.escape(items)}</div>')
+
+    grade = analysis.get("grade")
+    cuts = analysis.get("grade_cuts") or []
+    # 다음 등급까지 남은 점수
+    next_cut_note = "최고 등급 달성"
+    if grade and grade > 1 and cuts:
+        target = cuts[grade - 2]
+        gap = max(0, target - result["raw_score"])
+        next_cut_note = f'{grade - 1}등급까지 {gap:g}점'
+    grade_badge = ""
+    if grade:
+        grade_badge = f"""<div class="grade-badge">
+      <div class="g-num">{grade}<small>등급</small></div>
+      <div class="g-meta"><span>영어 절대평가</span><strong>원점수 {result['raw_score']:g}점</strong>
+        <span style="margin-top:2px">{next_cut_note}</span></div>
+      <div class="g-scale">등급컷<br>{' · '.join(f'{c:g}' for c in cuts[:4])} …</div>
+    </div>"""
+
+    bars = (
+        _bar("학생 점수", result["raw_score"], result["total_points"], f'{result["raw_score"]:g}점') +
+        _bar("응시 평균", result["class_mean"], result["total_points"],
+             f'{result["class_mean"]:g}점 · 표준편차 {result["class_std"]:g}', avg=True)
+    )
+
+    # 영역별(듣기/독해) 카드
+    area_cards = ""
+    for a in analysis.get("area_stats", []):
+        area_cards += (f'<div class="area-card"><div class="a-top"><h5>{html.escape(a["name"])}</h5>'
+                       f'<span class="a-rate">{a["rate"]:g}%</span></div>'
+                       f'<div class="bar-track"><i style="width:{a["rate"]:.1f}%"></i></div>'
+                       f'<div class="a-sub">{a["correct"]}/{a["count"]}문항 정답 · '
+                       f'{a["earned"]:g}/{a["possible"]:g}점</div></div>')
+    area_section = (f'<section class="panel"><div class="panel-title"><h4>영역별 성취</h4>'
+                    f'<span>배점 기준</span></div><div class="area-cards">{area_cards}</div>'
+                    f'</section>') if area_cards else ""
+
+    # 유형별 분석 + 약점 안내
+    type_stats = analysis.get("type_stats", [])
+    type_panel = _category_panel("유형별 성취율", "정답 배점 기준 · 낮은 순 확인", type_stats)
+    weak_note = ""
+    weak = [t for t in type_stats if t["rate"] < 60][-3:]
+    if weak:
+        names = ", ".join(html.escape(t["name"]) for t in reversed(weak))
+        weak_note = (f'<div class="weak-note"><strong>우선 보완 유형</strong> — '
+                     f'{names} 영역의 성취율이 낮습니다. 해당 유형 문항 풀이를 집중 권장합니다.</div>')
+
+    diff_panel = _category_panel("난이도별 성취율", "상·중·하 배점 기준",
+                                 analysis.get("difficulty_stats", []))
+
+    qcells = _question_cells(questions)
+
+    return f"""<div class="omr-report"><article class="doc">
+  <header class="hero">
+    <div class="brand"><div class="brand-mark">{html.escape(mark)}</div>
+      <div><strong>{school}</strong><span>영어 모의고사 정밀 분석 리포트</span></div></div>
+    <div class="title-block">
+      <p class="eyebrow">ENGLISH MOCK EXAM REPORT</p>
+      <h1>{title}</h1>
+    </div>
+    <div class="strip">
+      <div><span>학생명</span><strong>{name or '—'}</strong></div>
+      <div><span>학번</span><strong>{sid or '—'}</strong></div>
+      <div><span>응시 인원</span><strong>{result['class_size']}명</strong></div>
+      <div><span>발행일</span><strong>{date or '—'}</strong></div>
+    </div>
+  </header>
+
+  <div class="body">
+    {review_html}
+    {grade_badge}
+
+    <div class="kpis">
+      <div class="emph"><span>원점수</span><strong>{result['raw_score']:g}</strong><small>/ {result['total_points']:g}점</small></div>
+      <div><span>석차</span><strong>{result['rank']}위</strong><small>{result['class_size']}명 중</small></div>
+      <div><span>백분위</span><strong>{result['percentile']:g}</strong><small>응시 집단</small></div>
+      <div><span>정답 문항</span><strong>{result['num_correct']}개</strong><small>{len(questions)}문항 중</small></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-title"><h4>점수 비교</h4><span>{result['total_points']:g}점 만점</span></div>
+      {bars}
+    </section>
+
+    {area_section}
+    {type_panel}
+    {weak_note}
+    {diff_panel}
+
+    <section class="panel">
+      <div class="panel-title"><h4>문항별 정오답</h4><span>○ 정답 · × 오답 · – 미입력</span></div>
+      <div class="qgrid">{qcells}</div>
+      <div class="legend"><span>마우스를 올리면 문항 유형·내 답·정답·배점을 볼 수 있습니다.</span>
+        <span>정답 {result['num_correct']} · 오답 {result['num_wrong']} · 미입력 {result['num_blank']}</span></div>
+    </section>
+  </div>
+
+  <footer class="footer">
+    <div class="brand-mark">{html.escape(mark)}</div>
+    <div><strong>{school}</strong>
+      <p>영어 절대평가 등급은 원점수 기준입니다. 백분위는 응시 집단 참고값이며 링크 공유에 유의해 주세요.</p></div>
+  </footer>
+</article></div>"""
+
+
 def render_report_html(meta: ExamMeta, student: dict, result: dict,
-                       questions: list, review_flags: list) -> str:
-    """단독 열람용 완성 HTML 문서."""
-    body = render_report_body(meta, student, result, questions, review_flags)
+                       questions: list, review_flags: list,
+                       analysis: dict | None = None, font_cdn: bool = True) -> str:
+    """단독 열람용 완성 HTML 문서. report_type에 따라 본문을 선택."""
+    if meta.report_type == "english" and analysis is not None:
+        body = render_english_report_body(meta, student, result, questions, review_flags, analysis)
+    else:
+        body = render_report_body(meta, student, result, questions, review_flags)
     title = html.escape(meta.title)
     name = html.escape(student.get("name") or "")
+    font_link = PRETENDARD_LINK if font_cdn else ""
     return f"""<!doctype html>
 <html lang="ko"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>{title} 성적표 - {name}</title>
+{font_link}
 <style>{REPORT_CSS}</style></head>
 <body>{body}</body></html>"""
 
@@ -301,19 +475,23 @@ def build_reports(records: list, key: AnswerKey, meta: ExamMeta, out_dir: str,
         fname = f"{token}.html"
         student = {"student_id": sid, "name": rec.get("name", "")}
         result = {**s, **detail}
+        analysis = english_analysis(rec["answers"], key) if meta.report_type == "english" else None
         htmldoc = render_report_html(meta, student, result, questions,
-                                     rec.get("review_flags", []))
+                                     rec.get("review_flags", []), analysis=analysis)
         with open(os.path.join(reports_dir, fname), "w", encoding="utf-8") as fp:
             fp.write(htmldoc)
 
         url = f"{base_url.rstrip('/')}/{fname}" if base_url else fname
-        entries.append({
+        entry = {
             "student_id": sid, "name": rec.get("name", ""),
             "token": token, "file": fname, "url": url,
             "score": s["raw_score"], "total": s["total_points"],
             "rank": s["rank"], "class_size": s["class_size"],
             "percentile": s["percentile"],
-        })
+        }
+        if analysis and analysis.get("grade"):
+            entry["grade"] = analysis["grade"]
+        entries.append(entry)
 
     # manifest: 알림톡 발송 단계의 입력이 된다
     manifest = {

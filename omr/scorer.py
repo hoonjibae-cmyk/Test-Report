@@ -15,6 +15,9 @@ class AnswerKey:
     title: str
     answers: dict          # {문항no(int): 정답 보기 1-base(int)}
     points: dict           # {문항no(int): 배점(float)}
+    subject: str = ""      # "english" 등 (성적표 유형 선택에 사용)
+    grade_cuts: list = field(default_factory=list)  # 절대평가 등급컷 [90,80,...]
+    qmeta: dict = field(default_factory=dict)        # {문항no: {"area","type","difficulty"}}
 
     @classmethod
     def load(cls, path: str) -> "AnswerKey":
@@ -23,11 +26,74 @@ class AnswerKey:
         answers = {int(k): int(v) for k, v in d["answers"].items()}
         default_pt = d.get("default_point", 1.0)
         points = {q: float(d.get("points", {}).get(str(q), default_pt)) for q in answers}
-        return cls(d.get("exam_id", "EXAM"), d.get("title", ""), answers, points)
+        qmeta = {int(k): v for k, v in d.get("question_meta", {}).items()}
+        return cls(
+            exam_id=d.get("exam_id", "EXAM"),
+            title=d.get("title", ""),
+            answers=answers,
+            points=points,
+            subject=d.get("subject", ""),
+            grade_cuts=list(d.get("grade_cuts", [])),
+            qmeta=qmeta,
+        )
 
     @property
     def total_points(self) -> float:
         return sum(self.points.values())
+
+
+def compute_grade(raw: float, cuts: list) -> int | None:
+    """절대평가 등급컷으로 등급 산출. cuts=[90,80,...] → 90↑=1등급.
+
+    cuts가 없으면 None. 마지막 컷 미만이면 (len(cuts)+1)등급.
+    """
+    if not cuts:
+        return None
+    for i, cut in enumerate(cuts):
+        if raw >= cut:
+            return i + 1
+    return len(cuts) + 1
+
+
+def category_stats(answers: dict, key: AnswerKey, field_name: str) -> list[dict]:
+    """문항 메타의 특정 필드(area/type/difficulty)별 성취율 집계.
+
+    반환: [{"name","earned","possible","correct","count","rate"}] (성취율 내림차순).
+    """
+    groups: dict = {}
+    for q in key.answers:
+        meta = key.qmeta.get(q, {})
+        name = meta.get(field_name)
+        if not name:
+            continue
+        g = groups.setdefault(name, {"name": name, "earned": 0.0, "possible": 0.0,
+                                     "correct": 0, "count": 0})
+        pt = key.points[q]
+        g["possible"] += pt
+        g["count"] += 1
+        if answers.get(q) == key.answers[q]:
+            g["earned"] += pt
+            g["correct"] += 1
+    out = []
+    for g in groups.values():
+        g["rate"] = round(g["earned"] / g["possible"] * 100, 1) if g["possible"] else 0.0
+        g["earned"] = round(g["earned"], 3)
+        g["possible"] = round(g["possible"], 3)
+        out.append(g)
+    out.sort(key=lambda x: x["rate"], reverse=True)
+    return out
+
+
+def english_analysis(answers: dict, key: AnswerKey) -> dict:
+    """영어 모의고사 심화 분석: 등급 + 영역별/유형별/난이도별 성취율."""
+    detail = score_one(answers, key)
+    return {
+        "grade": compute_grade(detail["raw_score"], key.grade_cuts),
+        "grade_cuts": key.grade_cuts,
+        "area_stats": category_stats(answers, key, "area"),
+        "type_stats": category_stats(answers, key, "type"),
+        "difficulty_stats": category_stats(answers, key, "difficulty"),
+    }
 
 
 def score_one(answers: dict, key: AnswerKey) -> dict:

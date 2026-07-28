@@ -89,12 +89,24 @@ def _load_roster(path):
     return {str(k): v for k, v in data.items()}
 
 
+def _resolve_report_type(cli_value, key_path):
+    """--report-type 'auto'면 정답키 subject로 추론."""
+    if cli_value != "auto":
+        return cli_value
+    try:
+        with open(key_path, encoding="utf-8") as fp:
+            return "english" if json.load(fp).get("subject") == "english" else "basic"
+    except Exception:
+        return "basic"
+
+
 def cmd_batch(a):
     """스캔 폴더 → 판독 → 채점 → 웹 성적표 일괄 생성."""
     from .batch import run_batch
     from .report_web import ExamMeta
 
-    meta = ExamMeta(exam_id=a.exam, title=a.title, date=a.date, school=a.school)
+    rtype = _resolve_report_type(a.report_type, a.key)
+    meta = ExamMeta(exam_id=a.exam, title=a.title, date=a.date, school=a.school, report_type=rtype)
     params = ReadParams(mark_abs_min=a.threshold)
     res = run_batch(
         scan_dir=a.scans, template_path=a.template, key_path=a.key, out_dir=a.out,
@@ -124,7 +136,8 @@ def cmd_report(a):
     for r in records:  # answers 키를 int로 정규화
         r["answers"] = {int(k): v for k, v in r["answers"].items()}
     key = AnswerKey.load(a.key)
-    meta = ExamMeta(exam_id=a.exam, title=a.title, date=a.date, school=a.school)
+    rtype = _resolve_report_type(a.report_type, a.key)
+    meta = ExamMeta(exam_id=a.exam, title=a.title, date=a.date, school=a.school, report_type=rtype)
     built = build_reports(records, key, meta, a.out, base_url=a.base_url, salt=a.salt)
     print("웹 성적표 폴더 :", built["dir"])
     print("교사용 목록    :", built["index"])
@@ -192,6 +205,8 @@ def build_parser():
     b.add_argument("--roster", help="학번→이름 매핑 JSON(선택)")
     b.add_argument("--base-url", default="", help="링크 접두사(예: https://reports.school.kr/mid2026)")
     b.add_argument("--salt", default=DEFAULT_SALT, help="링크 토큰 salt(운영 시 반드시 고정·비공개)")
+    b.add_argument("--report-type", default="auto", choices=["auto", "basic", "english"],
+                   help="성적표 유형(auto=정답키 subject로 추론)")
     b.add_argument("--threshold", type=float, default=0.30)
     b.add_argument("--out", default="output")
     b.set_defaults(func=cmd_batch)
@@ -205,6 +220,7 @@ def build_parser():
     rp.add_argument("--school", default="")
     rp.add_argument("--base-url", default="")
     rp.add_argument("--salt", default=DEFAULT_SALT)
+    rp.add_argument("--report-type", default="auto", choices=["auto", "basic", "english"])
     rp.add_argument("--out", default="output")
     rp.set_defaults(func=cmd_report)
 

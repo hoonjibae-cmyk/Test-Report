@@ -86,6 +86,48 @@ python -m omr.cli serve --dir output/reports/MID2026 --port 8000
 `batch` 대신, 이미 판독·집계한 데이터가 있으면 `report --records records.json` 으로
 성적표만 생성할 수 있습니다.
 
+### 성적표 유형 (report type)
+
+`--report-type` 으로 성적표 유형을 고릅니다. 기본값 `auto`는 정답키의 `subject`
+값으로 자동 추론합니다. 모든 유형은 동일한 디자인 토큰(`REPORT_CSS`)을 공유합니다.
+
+| 유형 | 값 | 내용 |
+|------|----|------|
+| 기본형 | `basic` | 점수·성취수준·석차·백분위 + 반평균 비교 + 문항별 정오답 |
+| 영어 모의고사 | `english` | 기본형 + **절대평가 등급**, **듣기/독해 영역별 성취**, **유형별 성취율**(빈칸추론·순서·어법 등), **우선 보완 유형**, **난이도별 성취율** |
+
+```bash
+python -m omr.cli batch --scans eng_scans/ \
+    --template output/ENG2026M03_template.json --key examples/english_answer_key.json \
+    --exam ENG2026M03 --title "고1 3월 전국연합 · 영어영역" --school "○○학원" \
+    --report-type english --out output
+```
+
+#### 영어 모의고사 정답키 형식 (`examples/english_answer_key.json`)
+문항별 메타데이터(영역·유형·난이도)와 절대평가 등급컷을 추가합니다.
+```json
+{
+  "exam_id": "ENG2026M03", "subject": "english",
+  "default_point": 2,
+  "grade_cuts": [90, 80, 70, 60, 50, 40, 30, 20],
+  "answers": {"1": 5, "...": "...", "45": 3},
+  "points": {"13": 3, "21": 3},
+  "question_meta": {
+    "1":  {"area": "듣기", "type": "목적", "difficulty": "중"},
+    "31": {"area": "독해", "type": "빈칸 추론", "difficulty": "상"}
+  }
+}
+```
+- `grade_cuts`: 절대평가 등급컷(내림차순). `90↑=1등급`, 미만이면 다음 등급.
+- `question_meta.area` / `type` / `difficulty`: 영역별·유형별·난이도별 분석에 사용
+  (없는 문항은 해당 집계에서 제외).
+
+### 폰트 (Pretendard)
+성적표는 **Pretendard**를 우선 사용합니다(목동유쌤 리포트 톤). 단독 HTML에는
+Pretendard 동적 서브셋 CDN(`jsdelivr`) 링크가 포함되며, 온라인 배포 시 자동 적용됩니다.
+오프라인/사내망 등 CDN을 못 쓰는 환경에서는 Noto Sans KR 등으로 폴백합니다
+(완전 오프라인이면 Pretendard를 자체 호스팅하거나 `render_report_html(font_cdn=False)` 사용).
+
 ### 응시자별 시트 생성
 `--students students.json` 으로 응시자별 QR(사전 배정 학번)을 넣은 시트를 만듭니다.
 ```json
@@ -133,10 +175,14 @@ python tests/test_pipeline.py     # 또는  python -m pytest tests/ -v
 
 ## 로드맵 (다음 단계)
 1. **[완료] 생성 + 판독 + 채점 MVP**
-2. **[완료] 웹링크 형식 성적표** — 응시자별 토큰 HTML + manifest + 교사용 목록/CSV
+2. **[완료] 웹링크 형식 성적표** — 토큰 HTML + manifest + 교사용 목록/CSV,
+   네이비 톤앤매너, **기본형/영어 모의고사** 유형, Pretendard 적용
 3. **학부모 알림톡** — manifest의 링크를 승인 템플릿 변수에 치환하여 발송대행사
    API로 배치 발송
    *(선행 필요: 카카오 비즈니스 채널 개설, 발송대행사 계약, 템플릿 사전 심사)*
+
+향후 성적표 유형(국어·수학 모의고사, 학부모 요약형 등)은 `render_*_report_body`
+함수를 추가하고 `report_type`에 연결하면 동일 톤으로 확장됩니다.
 
 ## 운영 팁 (정확도 극대화)
 - **평판/ADF 스캐너 200~300dpi 흑백/그레이스케일** 입력을 권장합니다.
