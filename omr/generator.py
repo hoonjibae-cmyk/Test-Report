@@ -335,10 +335,11 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     box_y0 = mm(mt + 71)
     box_y1 = mm(idt + 9 * rp + 5)
     d.rectangle([box_x0, box_y0, box_x1, box_y1], outline=_NAVY, width=mm(0.5))
-    d.text((box_x0 + mm(3), box_y0 + mm(2)), "수 험 번 호", font=font(9.5, True), fill=_NAVY)
-    d.text((box_x0 + mm(3), box_y0 + mm(6.5)), "(왼쪽부터 4~5자리 기입)", font=font(7.2), fill=_INK)
-    # 상단 기입 칸 (버블 위, 겹치지 않게)
-    write_y0 = mm(mt + 79.5)
+    # 라벨과 안내문을 같은 줄에 두어 기입칸과 겹치지 않게 함
+    d.text((box_x0 + mm(3), box_y0 + mm(2.2)), "수 험 번 호", font=font(9, True), fill=_NAVY)
+    d.text((box_x0 + mm(27), box_y0 + mm(3.2)), "(왼쪽부터 4~5자리)", font=font(6.8), fill=_INK)
+    # 상단 기입 칸 (안내문 아래, 버블 위 — 상하 모두 이격)
+    write_y0 = mm(mt + 80)
     for col in range(cfg.id_digits):
         cx = mm(idl + col * cp)
         d.rectangle([cx - mm(3.2), write_y0, cx + mm(3.2), write_y0 + mm(5.5)],

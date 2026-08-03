@@ -251,9 +251,9 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     # --- 좌측 패널: 수험번호 그리드 (4~5자리, 왼쪽부터 채워쓰기) ---
     # 성명·학교/학년·수강반 박스 아래로 충분히 내려 간섭 제거.
     id_left = m_left + 12
-    id_top = m_top + 88
+    id_top = m_top + 91
     id_col_pitch = 9.0
-    id_row_pitch = 6.6
+    id_row_pitch = 6.4
     id_origin = (id_left, id_top)
     for col in range(config.id_digits):
         cx = id_left + col * id_col_pitch
