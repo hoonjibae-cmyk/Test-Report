@@ -1,0 +1,17 @@
+# Render.com 블루프린트 — 이 저장소를 연결하면 자동으로 웹 서비스를 만든다.
+# 대시보드에서 New + → Blueprint → 이 저장소 선택.
+services:
+  - type: web
+    name: omr-scoring
+    runtime: docker
+    plan: starter          # 유료(약 $7/월). 영구 디스크 사용을 위해 필요.
+    healthCheckPath: /healthz
+    disk:
+      name: omr-data
+      mountPath: /data     # 시험·성적표 데이터 영구 저장
+      sizeGB: 1
+    envVars:
+      - key: OMR_PASSWORD   # 관리자 로그인 비밀번호 — 배포 시 직접 입력
+        sync: false
+      - key: SECRET_KEY     # 세션 암호화 키 — 자동 생성
+        generateValue: true

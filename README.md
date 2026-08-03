@@ -193,6 +193,19 @@ python -m uvicorn webapp.app:app --host 0.0.0.0 --port 8000
 시험 데이터는 `data/exams/<시험코드>/`에 파일로 저장됩니다(`OMR_DATA_DIR`로 변경 가능).
 학원 로고는 `assets/academy-logo.png`를 자동 사용합니다.
 
+### 서버 배포
+인터넷에 배포해 여러 사용자가 쓰려면 `Dockerfile`·`render.yaml`이 준비되어 있습니다.
+환경변수 **`OMR_PASSWORD`** 를 설정하면 관리 화면이 로그인으로 보호되고(성적표 열람
+링크는 공개 유지), 시험 데이터는 `/data` 볼륨에 영구 저장됩니다. 초보자용 단계별
+안내는 **`배포방법.md`** 참고. (요약: Render.com → Blueprint로 저장소 연결 → 비밀번호
+입력 → 배포)
+
+| 배포 파일 | 역할 |
+|-----------|------|
+| `Dockerfile`   | 한글 폰트(나눔)·OpenCV 포함 실행 이미지 |
+| `render.yaml`  | Render 블루프린트(웹 서비스 + 영구 디스크 + 비밀번호) |
+| `배포방법.md`  | 코딩 몰라도 따라 하는 배포 설명서 |
+
 | 파일 | 역할 |
 |------|------|
 | `webapp/app.py`     | FastAPI 라우트(시험·OMR·정답키·판독·성적표) |

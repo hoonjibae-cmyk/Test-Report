@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>로그인 · OMR 채점 시스템</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body{display:grid;place-items:center;min-height:100vh;
+    background:radial-gradient(circle at 20% 20%,rgba(47,103,177,.15),transparent 35%),
+    radial-gradient(circle at 85% 85%,rgba(210,169,59,.13),transparent 35%),linear-gradient(135deg,#eef3f9,#f9fafc)}
+  .login{width:min(400px,92vw);background:#fff;border-radius:18px;box-shadow:var(--shadow);padding:34px 30px;text-align:center}
+  .login h1{margin:6px 0 4px;font-size:22px;letter-spacing:-.03em}
+  .login p{color:var(--muted);font-size:13px;margin:0 0 20px}
+  .login form{display:grid;gap:12px;text-align:left}
+  .err{background:var(--danger-soft);color:var(--danger);font-size:13px;border-radius:10px;padding:10px 12px}
+</style></head>
+<body>
+<div class="login">
+  <p class="eyebrow">OMR 채점 시스템</p>
+  <h1>목동유쌤영어학원</h1>
+  <p>관리자 비밀번호를 입력하세요.</p>
+  {% if error %}<div class="err">비밀번호가 올바르지 않습니다.</div>{% endif %}
+  <form method="post" action="/login">
+    <div><label>비밀번호</label><input type="password" name="password" autofocus required></div>
+    <button class="btn primary" type="submit" style="width:100%;justify-content:center">로그인</button>
+  </form>
+</div>
+</body></html>

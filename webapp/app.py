@@ -5,12 +5,15 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 from omr.generator import generate
 from omr.reader import read_omr, ReadParams
@@ -24,9 +27,60 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(BASE)
 LOGO = os.path.join(REPO, "assets", "academy-logo.png")
 
+# 배포용 로그인 보호: OMR_PASSWORD가 설정되면 관리 화면을 잠근다(성적표 열람은 공개).
+PASSWORD = os.environ.get("OMR_PASSWORD", "")
+SECRET = os.environ.get("SECRET_KEY") or secrets.token_hex(16)
+
 app = FastAPI(title="OMR 채점 시스템")
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
+templates.env.globals["auth_enabled"] = bool(PASSWORD)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """OMR_PASSWORD가 있으면 미인증 접근을 로그인으로 보낸다.
+
+    공개 경로: /login, /static, /healthz, 성적표 열람(/reports/view/…).
+    """
+
+    async def dispatch(self, request, call_next):
+        if not PASSWORD:
+            return await call_next(request)
+        path = request.url.path
+        public = (path == "/login" or path == "/healthz"
+                  or path.startswith("/static") or "/reports/view/" in path)
+        if not public and not request.session.get("auth"):
+            return RedirectResponse("/login", status_code=303)
+        return await call_next(request)
+
+
+# add 순서 주의: 나중에 add 된 것이 바깥(먼저 실행). Session이 바깥이어야 세션 사용 가능.
+app.add_middleware(AuthMiddleware)
+app.add_middleware(SessionMiddleware, secret_key=SECRET, max_age=60 * 60 * 12, same_site="lax")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    return templates.TemplateResponse(request, "login.html", {"error": False})
+
+
+@app.post("/login")
+def login(request: Request, password: str = Form(...)):
+    if PASSWORD and secrets.compare_digest(password, PASSWORD):
+        request.session["auth"] = True
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"error": True})
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
 
 
 # ---------------------------------------------------------------------------

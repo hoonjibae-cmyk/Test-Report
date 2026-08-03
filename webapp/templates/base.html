@@ -11,6 +11,7 @@
     <strong>OMR 채점 시스템</strong>
   </a>
   <span style="margin-left:auto">목동유쌤영어학원</span>
+  {% if auth_enabled %}<a href="/logout" style="color:#c8d9ec;font-size:12px;margin-left:14px">로그아웃</a>{% endif %}
 </div></div>
 <main><div class="wrap">
 {% block body %}{% endblock %}
