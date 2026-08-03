@@ -194,14 +194,22 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         if status != "ok":
             review_flags.append({"type": "question", "no": q, "status": status})
 
-    id_digits = ""
+    # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
+    id_cells = []            # (col, digit or None, blank?)
     for col in sorted(id_groups):
         chosen, status = _judge_group(id_groups[col], params)
         id_columns[col] = GroupResult(col, chosen, status, id_groups[col])
-        id_digits += str(chosen) if (status == "ok" and chosen is not None) else "?"
-        if status != "ok":
-            review_flags.append({"type": "id", "col": col, "status": status})
-    student_id_bubbles = id_digits if id_digits and "?" not in id_digits else (id_digits or None)
+        digit = str(chosen) if (status == "ok" and chosen is not None) else None
+        id_cells.append((col, digit, status == "blank"))
+    # 뒤쪽 연속 빈칸 제거(4~5자리 좌측정렬 대응)
+    while id_cells and id_cells[-1][2]:
+        id_cells.pop()
+    id_digits = ""
+    for col, digit, _blank in id_cells:
+        id_digits += digit if digit is not None else "?"
+        if digit is None:  # 중간의 빈칸/중복은 검수 대상
+            review_flags.append({"type": "id", "col": col, "status": "review"})
+    student_id_bubbles = id_digits or None
 
     if debug_out:
         _draw_debug(warped, template, questions, id_columns, r, Wc, Hc, debug_out)

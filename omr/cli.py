@@ -27,6 +27,7 @@ def cmd_generate(a):
         exam_id=a.exam, title=a.title, num_questions=a.questions,
         num_choices=a.choices, id_digits=a.id_digits,
         questions_per_column=a.per_column,
+        style=a.style, period=a.period, subject_label=a.subject, academy=a.academy,
     )
     students = None
     if a.students:
@@ -170,6 +171,11 @@ def build_parser():
     g.add_argument("--choices", type=int, default=5)
     g.add_argument("--id-digits", type=int, default=8)
     g.add_argument("--per-column", type=int, default=20)
+    g.add_argument("--style", default="basic", choices=["basic", "exam"],
+                   help="basic=세로 단순형 / exam=수능형 가로")
+    g.add_argument("--period", default="", help="교시(예: 3) — exam 스타일")
+    g.add_argument("--subject", default="", help="영역 표기(예: 영어 영역) — exam 스타일")
+    g.add_argument("--academy", default="", help="학원명(구석 로고) — exam 스타일")
     g.add_argument("--students", help="응시자 목록 JSON([{id,name}])")
     g.add_argument("--dpi", type=int, default=200)
     g.add_argument("--no-preview", action="store_true")

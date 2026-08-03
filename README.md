@@ -133,6 +133,23 @@ Pretendard 동적 서브셋 CDN(`jsdelivr`) 링크가 포함되며, 온라인 �
 오프라인/사내망 등 CDN을 못 쓰는 환경에서는 Noto Sans KR 등으로 폴백합니다
 (완전 오프라인이면 Pretendard를 자체 호스팅하거나 `render_report_html(font_cdn=False)` 사용).
 
+### 답안지 스타일 (`--style`)
+- **`basic`**(기본): 세로 A4 단순형(마커·QR·학번·문항).
+- **`exam`**: **수능형 가로 답안지** — 크림색 배경, 상·하 타이밍 마크, 네이비 제목
+  밴드(`③교시 영어 영역`), 성명 박스, **수험번호 그리드(왼쪽부터 4~5자리)**,
+  감독관 확인란, 3단 문항(5행 그룹 음영·5의 배수 강조), 분홍 버블(①~⑤),
+  **학원 로고·이름(우하단)**. 정렬 마커·QR·판독 좌표는 동일하게 유지되어 판독
+  정확도는 그대로입니다.
+
+```bash
+python -m omr.cli generate --style exam \
+    --exam ENG2026M03 --title "2026 유쌤 모의고사 답안지" \
+    --questions 45 --choices 5 --id-digits 5 --per-column 15 \
+    --period 3 --subject "영어 영역" --academy "유쌤영어학원" --out output
+```
+수험번호는 **왼쪽부터 채워** 표기하며(4~5자리), 판독기는 뒤쪽 빈 칸을 미기입으로
+간주해 절삭합니다(예: `1234` → 5칸 중 4칸만 마킹).
+
 ### 응시자별 시트 생성
 `--students students.json` 으로 응시자별 QR(사전 배정 학번)을 넣은 시트를 만듭니다.
 ```json

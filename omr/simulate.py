@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import cv2
 
-from .generator import render_image
+from .generator import render_sheet_image
 from .layout import Layout, SheetConfig, build_layout
 
 
@@ -25,7 +25,7 @@ def simulate_marked(config: SheetConfig, answers: dict, student_id: str,
     student_id: 자릿수 문자열 (예: "20250042"); 길이는 config.id_digits 이하.
     """
     layout = build_layout(config)
-    pil = render_image(layout, dpi=dpi)
+    pil = render_sheet_image(layout, dpi=dpi)
     img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
     r = int(_mm2px(layout.bubble_radius_mm, dpi) * 0.8)
@@ -40,8 +40,8 @@ def simulate_marked(config: SheetConfig, answers: dict, student_id: str,
         if b:
             fill(b.x_mm, b.y_mm)
 
-    # 학번 마킹 (자리별 숫자)
-    sid = str(student_id).rjust(config.id_digits, "0")[: config.id_digits]
+    # 학번 마킹: 왼쪽부터 채워쓰기(부족한 자리는 미표기)
+    sid = str(student_id)[: config.id_digits]
     for col, ch in enumerate(sid):
         if ch.isdigit():
             b = bub.get(("id", col, int(ch)))

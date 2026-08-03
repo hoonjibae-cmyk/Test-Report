@@ -66,6 +66,34 @@ def test_read_roundtrip_accuracy():
     assert sids == 8, f"student id {sids}/8"
 
 
+def test_exam_style_roundtrip_and_left_aligned_id():
+    d = _tmp()
+    cfg = SheetConfig(exam_id="EX", title="모의고사 답안지", num_questions=45,
+                      num_choices=5, id_digits=5, questions_per_column=15,
+                      style="exam", period="3", subject_label="영어 영역",
+                      academy="테스트학원")
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    tpl = res["template"]
+
+    # 모든 버블이 마커 사각형 안에 있어야 함(가로형)
+    layout = build_layout(cfg)
+    for b in layout.bubbles:
+        assert -0.001 <= b.u <= 1.001 and -0.001 <= b.v <= 1.001
+
+    # 4자리·5자리 좌측정렬 학번 모두 복원되고 45/45
+    for sid in ["1234", "52130"]:
+        rng = random.Random(len(sid))
+        ans = {q: rng.randint(1, 5) for q in range(1, 46)}
+        scan = simulate_marked(cfg, ans, sid, dpi=210, distort=True, seed=len(sid))
+        p = os.path.join(d, f"e{sid}.png")
+        cv2.imwrite(p, scan)
+        r = read_omr(p, tpl, params=ReadParams())
+        correct = sum(1 for q, v in ans.items() if r.answers().get(q) == v)
+        assert correct == 45, f"{sid}: {correct}/45"
+        assert r.student_id_bubbles == sid, r.student_id_bubbles
+        assert len(r.review_flags) == 0
+
+
 def test_ambiguous_flagged_not_scored():
     d = _tmp()
     cfg = SheetConfig(exam_id="T3", num_questions=10, num_choices=5, id_digits=4)

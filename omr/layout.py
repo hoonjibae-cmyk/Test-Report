@@ -31,6 +31,10 @@ class SheetConfig:
     num_choices: int = 5          # 보기 수 (①~⑤)
     id_digits: int = 8            # 학번(수험번호) 자릿수
     questions_per_column: int = 20  # 문항 열당 문항 수
+    style: str = "basic"          # "basic"(세로 단순형) | "exam"(수능형 가로)
+    period: str = ""              # 교시 표기 (예: "3")
+    subject_label: str = ""       # 영역 표기 (예: "영어 영역")
+    academy: str = ""             # 학원명 (구석 로고 옆)
 
 
 @dataclass
@@ -68,6 +72,11 @@ class Layout:
     qr_size_mm: float
     id_origin_mm: tuple              # 학번 그리드 좌상단(첫 버블 중심)
     q_columns_origin_mm: list        # 각 문항 열의 시작 좌표
+    id_col_pitch_mm: float = 8.0     # 학번 열 간격(렌더러용)
+    id_row_pitch_mm: float = 5.0     # 학번 행 간격
+    q_choice_pitch_mm: float = 7.0   # 보기 버블 간격
+    q_row_pitch_mm: float = 8.0      # 문항 행 간격
+    style: str = "basic"
 
     def template_dict(self, dpi: int) -> dict:
         """판독기가 사용할 템플릿(JSON 직렬화용)."""
@@ -98,6 +107,8 @@ class Layout:
 
 def build_layout(config: SheetConfig) -> Layout:
     """SheetConfig로부터 구체 배치를 계산한다."""
+    if config.style == "exam":
+        return build_exam_layout(config)
     page_w, page_h = A4_W_MM, A4_H_MM
     margin = 12.0
     marker_size = 14.0
@@ -196,4 +207,97 @@ def build_layout(config: SheetConfig) -> Layout:
         qr_size_mm=qr_size,
         id_origin_mm=id_origin,
         q_columns_origin_mm=q_columns_origin,
+        id_col_pitch_mm=id_col_pitch,
+        id_row_pitch_mm=id_row_pitch,
+        q_choice_pitch_mm=choice_pitch,
+        q_row_pitch_mm=row_pitch,
+        style="basic",
+    )
+
+
+def build_exam_layout(config: SheetConfig) -> Layout:
+    """수능형 가로 답안지 배치. 성명·수험번호(좌측정렬) + 3단 문항.
+
+    판독 관점에서는 기본형과 동일하게 ArUco 마커 기준 사각형 + 버블 정규화 좌표를
+    저장하므로 reader가 그대로 동작한다. 나머지는 렌더러가 수능풍으로 그린다.
+    """
+    page_w, page_h = A4_H_MM, A4_W_MM   # landscape (297 x 210)
+    margin = 10.0
+    marker_size = 11.0
+
+    m_left = margin + marker_size / 2
+    m_right = page_w - margin - marker_size / 2
+    m_top = margin + marker_size / 2
+    m_bottom = page_h - margin - marker_size / 2
+    marker_centers = {
+        "TL": (m_left, m_top), "TR": (m_right, m_top),
+        "BR": (m_right, m_bottom), "BL": (m_left, m_bottom),
+    }
+    ref_left, ref_right = m_left, m_right
+    ref_top, ref_bottom = m_top, m_bottom
+    ref_w, ref_h = ref_right - ref_left, ref_bottom - ref_top
+
+    def norm(x, y):
+        return (x - ref_left) / ref_w, (y - ref_top) / ref_h
+
+    bubble_radius = 2.5
+    bubbles: list[Bubble] = []
+
+    title_xy = (m_left + 16, m_top + 4)
+    qr_size = 18.0
+    qr_xy = (m_right - 15 - qr_size, m_top + 1)   # TR 마커와 겹치지 않게 왼쪽으로
+
+    # --- 좌측 패널: 수험번호 그리드 (4~5자리, 왼쪽부터 채워쓰기) ---
+    id_left = m_left + 12
+    id_top = m_top + 58          # 성명 박스 아래
+    id_col_pitch = 9.0
+    id_row_pitch = 8.4
+    id_origin = (id_left, id_top)
+    for col in range(config.id_digits):
+        cx = id_left + col * id_col_pitch
+        for digit in range(10):
+            cy = id_top + digit * id_row_pitch
+            u, v = norm(cx, cy)
+            bubbles.append(Bubble("id", col, digit, cx, cy, u, v))
+
+    # --- 우측: 3단 문항 ---
+    n = config.num_questions
+    per_col = config.questions_per_column or 15
+    num_cols = (n + per_col - 1) // per_col
+    q_area_left = m_left + 78     # 좌측 패널 오른쪽부터
+    q_area_right = m_right - 4
+    col_pitch = (q_area_right - q_area_left) / num_cols
+    choice_pitch = 6.6
+    label_gap = 13.0
+    q_top = m_top + 30           # 상단 안내문 아래
+    q_bottom_limit = m_bottom - 4
+    rows = min(per_col, n)
+    row_pitch = min(9.5, (q_bottom_limit - q_top) / (rows - 1)) if rows > 1 else 9.5
+
+    q_columns_origin = []
+    for q in range(1, n + 1):
+        col_i = (q - 1) // per_col
+        row_i = (q - 1) % per_col
+        col_x0 = q_area_left + col_i * col_pitch
+        row_y = q_top + row_i * row_pitch
+        if row_i == 0:
+            q_columns_origin.append((col_x0, q_top))
+        first_choice_x = col_x0 + label_gap
+        for ci in range(config.num_choices):
+            cx = first_choice_x + ci * choice_pitch
+            u, v = norm(cx, row_y)
+            bubbles.append(Bubble("question", q, ci, cx, row_y, u, v))
+
+    return Layout(
+        config=config,
+        page_w_mm=page_w, page_h_mm=page_h,
+        marker_size_mm=marker_size, marker_centers_mm=marker_centers,
+        bubble_radius_mm=bubble_radius, bubbles=bubbles,
+        ref_left_mm=ref_left, ref_right_mm=ref_right,
+        ref_top_mm=ref_top, ref_bottom_mm=ref_bottom,
+        title_xy_mm=title_xy, qr_xy_mm=qr_xy, qr_size_mm=qr_size,
+        id_origin_mm=id_origin, q_columns_origin_mm=q_columns_origin,
+        id_col_pitch_mm=id_col_pitch, id_row_pitch_mm=id_row_pitch,
+        q_choice_pitch_mm=choice_pitch, q_row_pitch_mm=row_pitch,
+        style="exam",
     )

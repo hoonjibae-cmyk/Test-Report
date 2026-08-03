@@ -213,6 +213,208 @@ def _right_text(draw, rx, cy, text, font, fill="black"):
 
 
 # ----------------------------------------------------------------------------
+# 수능형(exam) 렌더러 — PIL 단일 경로. PDF는 이 이미지를 전면 배치.
+# ----------------------------------------------------------------------------
+# 색상 (스캔 안정성: 버블 내부는 흰색 유지, 외곽/숫자만 옅은 분홍)
+_CREAM = (245, 243, 214)
+_NAVY = (24, 60, 115)
+_PINK = (206, 118, 138)
+_BAND = (236, 234, 203)
+_BORDER = (150, 158, 138)
+_INK = (45, 47, 55)
+
+
+def render_exam_image(layout: Layout, dpi: int = 200, student=None,
+                      font_path: str | None = None) -> Image.Image:
+    """수능형 가로 답안지를 그린다(성명·수험번호·3단 문항·안내문·학원 로고)."""
+    font_path = font_path or find_font()
+    cfg = layout.config
+
+    def mm(v):
+        return int(round(v / 25.4 * dpi))
+
+    W, H = mm(layout.page_w_mm), mm(layout.page_h_mm)
+    img = Image.new("RGB", (W, H), _CREAM)
+    d = ImageDraw.Draw(img)
+
+    def font(pt, bold=False):
+        px = int(round(pt / 72 * dpi))
+        p = font_path
+        if bold:
+            cand = font_path.replace("Regular", "Bold").replace("NanumGothic", "NanumGothicBold")
+            import os as _os
+            if _os.path.exists(cand):
+                p = cand
+        try:
+            return ImageFont.truetype(p, px)
+        except Exception:
+            return ImageFont.load_default()
+
+    ml, mr = layout.ref_left_mm, layout.ref_right_mm
+    mt, mb = layout.ref_top_mm, layout.ref_bottom_mm
+
+    # --- 타이밍 마크 (상·하 가장자리 검은 눈금 — OMR 느낌) ---
+    tick_w, tick_h = mm(4.5), mm(2.0)
+    x = mm(28)
+    while x < W - mm(28):
+        d.rectangle([x, mm(3.5), x + tick_w, mm(3.5) + tick_h], fill="black")
+        d.rectangle([x, H - mm(3.5) - tick_h, x + tick_w, H - mm(3.5)], fill="black")
+        x += mm(9)
+
+    # --- ArUco 정렬 마커 (기능용) ---
+    for corner, (cx, cy) in layout.marker_centers_mm.items():
+        s = layout.marker_size_mm
+        m = make_marker_image(corner).resize((mm(s), mm(s)), Image.NEAREST).convert("RGB")
+        img.paste(m, (mm(cx - s / 2), mm(cy - s / 2)))
+
+    # --- QR (우상단) ---
+    exam_id = cfg.exam_id
+    sid = student["id"] if student else ""
+    qs = layout.qr_size_mm
+    q = make_qr_image(f"{exam_id}|{sid}").resize((mm(qs), mm(qs)), Image.NEAREST).convert("RGB")
+    qx, qy = layout.qr_xy_mm
+    img.paste(q, (mm(qx), mm(qy)))
+
+    # --- 제목 밴드 (좌상단, 코너 마커 오른쪽) ---
+    period = cfg.period or "3"
+    subject = cfg.subject_label or "영어 영역"
+    tb_x0, tb_y0 = mm(ml + 16), mm(mt + 1)
+    tb_x1, tb_y1 = mm(ml + 74), mm(mt + 25)
+    d.rounded_rectangle([tb_x0, tb_y0, tb_x1, tb_y1], radius=mm(2), fill=_NAVY)
+    _centered_text(d, (tb_x0 + tb_x1) // 2, tb_y0 + mm(6), cfg.title or "모의고사 답안지",
+                   font(11, True), fill="white")
+    # 교시 원 + 영역
+    circ_cx, circ_cy, cr = tb_x0 + mm(9), tb_y1 - mm(8), mm(5.5)
+    d.ellipse([circ_cx - cr, circ_cy - cr, circ_cx + cr, circ_cy + cr], outline="white", width=mm(0.6))
+    _centered_text(d, circ_cx, circ_cy, str(period), font(13, True), fill="white")
+    d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), f"교시   {subject}", font=font(13, True), fill="white")
+
+    # --- 상단 안내문 (우측, 질문 헤더 위) ---
+    ins_x = mm(ml + 80)
+    ins_y = mm(mt + 2)
+    d.text((ins_x, ins_y), "※ 검은색 컴퓨터용 사인펜만 사용하여 표기하십시오.",
+           font=font(8.0), fill=_INK)
+    d.text((ins_x, ins_y + mm(5.0)), "※ 수험번호는 왼쪽부터 채워 표기(4~5자리).",
+           font=font(8.0), fill=_INK)
+    d.text((ins_x, ins_y + mm(10.0)), "※ 한 문항에 하나만 표기 · 수정 시 수정테이프 사용.",
+           font=font(8.0), fill=_INK)
+
+    # --- 성명 박스 ---
+    nm_x0, nm_y0 = mm(ml + 2), mm(mt + 30)
+    nm_x1, nm_y1 = mm(ml + 74), mm(mt + 44)
+    d.rectangle([nm_x0, nm_y0, nm_x1, nm_y1], outline=_BORDER, width=mm(0.4))
+    d.text((nm_x0 + mm(3), nm_y0 + mm(4.5)), "성 명", font=font(10, True), fill=_INK)
+    d.line([nm_x0 + mm(22), nm_y1 - mm(4), nm_x1 - mm(4), nm_y1 - mm(4)], fill=_BORDER, width=mm(0.4))
+    if student:
+        _centered_text(d, (nm_x0 + nm_x1) // 2 + mm(6), (nm_y0 + nm_y1) // 2,
+                       student.get("name", ""), font(11, True), fill=_INK)
+
+    # --- 수험번호 그리드 ---
+    idl, idt = layout.id_origin_mm
+    cp, rp = layout.id_col_pitch_mm, layout.id_row_pitch_mm
+    box_x0 = mm(idl - 6); box_y0 = mm(idt - 18)
+    box_x1 = mm(idl + (cfg.id_digits - 1) * cp + 6); box_y1 = mm(idt + 9 * rp + 6)
+    d.rectangle([box_x0, box_y0, box_x1, box_y1], outline=_NAVY, width=mm(0.5))
+    d.text((box_x0 + mm(2), box_y0 + mm(1.5)), "수 험 번 호", font=font(9.5, True), fill=_NAVY)
+    d.text((box_x0 + mm(2), box_y0 + mm(6.5)), "(왼쪽부터 4~5자리)", font=font(7.5), fill=_INK)
+    # 상단 기입 칸
+    for col in range(cfg.id_digits):
+        cx = mm(idl + col * cp)
+        d.rectangle([cx - mm(3.4), box_y0 + mm(11), cx + mm(3.4), box_y0 + mm(17)],
+                    outline=_BORDER, width=mm(0.4))
+    # 0~9 버블 (흰 내부 + 분홍 외곽 + 숫자)
+    r = mm(layout.bubble_radius_mm)
+    bf = font(6.5)
+    for b in layout.bubbles:
+        if b.role != "id":
+            continue
+        cx, cy = mm(b.x_mm), mm(b.y_mm)
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
+        _centered_text(d, cx, cy, str(b.value), bf, fill=_PINK)
+
+    # --- 감독관 확인 ---
+    gv_y0 = box_y1 + mm(4)
+    d.rectangle([box_x0, gv_y0, box_x1, gv_y0 + mm(16)], outline=_BORDER, width=mm(0.4))
+    d.text((box_x0 + mm(2), gv_y0 + mm(1.5)), "감독관 확인", font=font(9, True), fill=_INK)
+    d.text((box_x0 + mm(2), gv_y0 + mm(7)), "(서명 또는 날인)", font=font(7.5), fill=_INK)
+
+    # --- 문항 (3단, 5행 그룹 음영 + 5의 배수 굵게) ---
+    per_col = cfg.questions_per_column or 15
+    qbycol: dict = {}
+    for b in layout.bubbles:
+        if b.role != "question":
+            continue
+        qbycol.setdefault((b.index - 1) // per_col, {}).setdefault(b.index, []).append(b)
+
+    cpitch = layout.q_choice_pitch_mm
+    rpitch = layout.q_row_pitch_mm
+    qf = font(9, True)
+    cf = font(6.3)
+    for col_i, qmap in sorted(qbycol.items()):
+        qnos = sorted(qmap)
+        first_b = sorted(qmap[qnos[0]], key=lambda b: b.value)[0]
+        col_left = first_b.x_mm - 13
+        col_right = first_b.x_mm + (cfg.num_choices - 1) * cpitch + 4
+        header_y = mm(mt + 22)
+        # 헤더 바
+        d.rounded_rectangle([mm(col_left), header_y, mm(col_right), header_y + mm(6)],
+                            radius=mm(1), fill=_NAVY)
+        _centered_text(d, mm((col_left + col_right) / 2), header_y + mm(3),
+                       "문번        답    란", font(8.5, True), fill="white")
+        # 그룹 음영 + 행
+        for gi, qno in enumerate(qnos):
+            bl = sorted(qmap[qno], key=lambda b: b.value)
+            ry = bl[0].y_mm
+            band = (gi // 5) % 2 == 1
+            if band:
+                d.rectangle([mm(col_left), mm(ry - rpitch / 2), mm(col_right), mm(ry + rpitch / 2)],
+                            fill=_BAND)
+            bold = (qno % 5 == 0)
+            _centered_text(d, mm(col_left + 5.5), mm(ry), str(qno),
+                           font(9, bold), fill=_NAVY if bold else _INK)
+            for b in bl:
+                cx, cy = mm(b.x_mm), mm(b.y_mm)
+                d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
+                _centered_text(d, cx, cy, str(b.value + 1), cf, fill=_PINK)
+        # 열 외곽선
+        d.rectangle([mm(col_left), header_y, mm(col_right),
+                     mm(sorted(qmap[qnos[-1]], key=lambda b: b.value)[0].y_mm + rpitch / 2)],
+                    outline=_BORDER, width=mm(0.4))
+
+    # --- 학원 로고/이름 (우하단 구석) ---
+    academy = cfg.academy or "○○학원"
+    lg = mm(7.5)
+    ac_w = mm(2 + 4 * len(academy))
+    lx, ly = mm(mr) - mm(2) - ac_w - lg, mm(mb - 6)
+    _brand_mark(d, lx, ly, lg, academy[0], font(4.5, True))
+    d.text((lx + lg + mm(2), ly + lg / 2 - mm(2.4)), academy, font=font(9.5, True), fill=_NAVY)
+
+    return img
+
+
+def _brand_mark(d, x, y, size, letter, font_obj):
+    d.rounded_rectangle([x, y, x + size, y + size], radius=int(size * 0.28), fill=_NAVY)
+    _centered_text(d, x + size // 2, y + size // 2, letter, font_obj, fill="white")
+
+
+def render_sheet_image(layout: Layout, dpi: int = 200, student=None,
+                       font_path: str | None = None) -> Image.Image:
+    """스타일에 맞는 답안지 이미지를 반환(basic/exam 공용 진입점)."""
+    if layout.config.style == "exam":
+        return render_exam_image(layout, dpi=dpi, student=student, font_path=font_path)
+    return render_image(layout, dpi=dpi, student=student, font_path=font_path)
+
+
+def render_pdf_from_image(layout: Layout, path: str, student=None, dpi: int = 300):
+    """수능형: 고해상 PIL 이미지를 A4(가로) 전면에 배치한 PDF."""
+    im = render_exam_image(layout, dpi=dpi, student=student)
+    c = rl_canvas.Canvas(path, pagesize=(layout.page_w_mm * MM, layout.page_h_mm * MM))
+    c.drawImage(ImageReader(im), 0, 0, width=layout.page_w_mm * MM, height=layout.page_h_mm * MM)
+    c.showPage()
+    c.save()
+
+
+# ----------------------------------------------------------------------------
 # 상위 API
 # ----------------------------------------------------------------------------
 def generate(config: SheetConfig, out_dir: str, dpi: int = 200, students=None,
@@ -232,15 +434,19 @@ def generate(config: SheetConfig, out_dir: str, dpi: int = 200, students=None,
 
     result = {"template": tpl_path, "pdfs": [], "previews": []}
 
+    exam_style = config.style == "exam"
     targets = students if students else [None]
     for i, stu in enumerate(targets):
         tag = stu["id"] if stu else "blank"
         pdf_path = os.path.join(out_dir, f"{config.exam_id}_{tag}.pdf")
-        render_pdf(layout, pdf_path, student=stu)
+        if exam_style:
+            render_pdf_from_image(layout, pdf_path, student=stu)
+        else:
+            render_pdf(layout, pdf_path, student=stu)
         result["pdfs"].append(pdf_path)
         if make_preview:
             png_path = os.path.join(out_dir, f"{config.exam_id}_{tag}_preview.png")
-            render_image(layout, dpi=dpi, student=stu).save(png_path)
+            render_sheet_image(layout, dpi=dpi, student=stu).save(png_path)
             result["previews"].append(png_path)
 
     return result
