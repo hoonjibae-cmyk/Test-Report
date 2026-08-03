@@ -216,11 +216,11 @@ def _right_text(draw, rx, cy, text, font, fill="black"):
 # 수능형(exam) 렌더러 — PIL 단일 경로. PDF는 이 이미지를 전면 배치.
 # ----------------------------------------------------------------------------
 # 색상 (스캔 안정성: 버블 내부는 흰색 유지, 외곽/숫자만 옅은 분홍)
-_CREAM = (245, 243, 214)
+_BG = (255, 255, 255)      # 배경 흰색
 _NAVY = (24, 60, 115)
 _PINK = (206, 118, 138)
-_BAND = (236, 234, 203)
-_BORDER = (150, 158, 138)
+_BAND = (238, 241, 246)    # 5행 그룹 음영(연한 회청)
+_BORDER = (176, 184, 196)
 _INK = (45, 47, 55)
 
 
@@ -234,7 +234,7 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         return int(round(v / 25.4 * dpi))
 
     W, H = mm(layout.page_w_mm), mm(layout.page_h_mm)
-    img = Image.new("RGB", (W, H), _CREAM)
+    img = Image.new("RGB", (W, H), _BG)
     d = ImageDraw.Draw(img)
 
     def font(pt, bold=False):
@@ -249,6 +249,15 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
             return ImageFont.truetype(p, px)
         except Exception:
             return ImageFont.load_default()
+
+    def fit_font(text, max_px, start_pt=12.0, min_pt=7.0, bold=True):
+        pt = start_pt
+        while pt > min_pt:
+            f = font(pt, bold)
+            if d.textlength(text, font=f) <= max_px:
+                return f
+            pt -= 0.5
+        return font(min_pt, bold)
 
     ml, mr = layout.ref_left_mm, layout.ref_right_mm
     mt, mb = layout.ref_top_mm, layout.ref_bottom_mm
@@ -276,18 +285,22 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     img.paste(q, (mm(qx), mm(qy)))
 
     # --- 제목 밴드 (좌상단, 코너 마커 오른쪽) ---
+    # 답안지 이름 = 사용자가 설정한 시험제목(자동). '답안지'가 없으면 덧붙임.
     period = cfg.period or "3"
     subject = cfg.subject_label or "영어 영역"
+    sheet_title = cfg.title or "모의고사"
+    if "답안지" not in sheet_title:
+        sheet_title = sheet_title + " 답안지"
     tb_x0, tb_y0 = mm(ml + 16), mm(mt + 1)
     tb_x1, tb_y1 = mm(ml + 74), mm(mt + 25)
     d.rounded_rectangle([tb_x0, tb_y0, tb_x1, tb_y1], radius=mm(2), fill=_NAVY)
-    _centered_text(d, (tb_x0 + tb_x1) // 2, tb_y0 + mm(6), cfg.title or "모의고사 답안지",
-                   font(11, True), fill="white")
+    _centered_text(d, (tb_x0 + tb_x1) // 2, tb_y0 + mm(6),
+                   sheet_title, fit_font(sheet_title, tb_x1 - tb_x0 - mm(6), 11, 7), fill="white")
     # 교시 원 + 영역
     circ_cx, circ_cy, cr = tb_x0 + mm(9), tb_y1 - mm(8), mm(5.5)
     d.ellipse([circ_cx - cr, circ_cy - cr, circ_cx + cr, circ_cy + cr], outline="white", width=mm(0.6))
     _centered_text(d, circ_cx, circ_cy, str(period), font(13, True), fill="white")
-    d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), f"교시   {subject}", font=font(13, True), fill="white")
+    d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), f"교시   {subject}", font=font(12, True), fill="white")
 
     # --- 상단 안내문 (우측, 질문 헤더 위) ---
     ins_x = mm(ml + 80)
@@ -299,32 +312,40 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     d.text((ins_x, ins_y + mm(10.0)), "※ 한 문항에 하나만 표기 · 수정 시 수정테이프 사용.",
            font=font(8.0), fill=_INK)
 
-    # --- 성명 박스 ---
-    nm_x0, nm_y0 = mm(ml + 2), mm(mt + 30)
-    nm_x1, nm_y1 = mm(ml + 74), mm(mt + 44)
-    d.rectangle([nm_x0, nm_y0, nm_x1, nm_y1], outline=_BORDER, width=mm(0.4))
-    d.text((nm_x0 + mm(3), nm_y0 + mm(4.5)), "성 명", font=font(10, True), fill=_INK)
-    d.line([nm_x0 + mm(22), nm_y1 - mm(4), nm_x1 - mm(4), nm_y1 - mm(4)], fill=_BORDER, width=mm(0.4))
-    if student:
-        _centered_text(d, (nm_x0 + nm_x1) // 2 + mm(6), (nm_y0 + nm_y1) // 2,
-                       student.get("name", ""), font(11, True), fill=_INK)
+    # --- 좌측 인적사항 박스 (성명 / 학교·학년 / 수강반) ---
+    px0, px1 = mm(ml + 2), mm(ml + 74)
+
+    def field_box(y0, y1, label, value=""):
+        d.rectangle([px0, mm(y0), px1, mm(y1)], outline=_BORDER, width=mm(0.4))
+        d.text((px0 + mm(3), mm(y0) + mm(2.2)), label, font=font(9, True), fill=_INK)
+        lx = px0 + mm(26)
+        d.line([lx, mm(y1) - mm(3.5), px1 - mm(4), mm(y1) - mm(3.5)], fill=_BORDER, width=mm(0.3))
+        if value:
+            d.text((lx + mm(2), mm(y0) + mm(2.2)), value, font=font(9.5, True), fill=_INK)
+
+    field_box(mt + 30, mt + 42, "성 명", student.get("name", "") if student else "")
+    field_box(mt + 43, mt + 55, "학교 · 학년", student.get("school", "") if student else "")
+    field_box(mt + 56, mt + 68, "수 강 반", student.get("class", "") if student else "")
 
     # --- 수험번호 그리드 ---
     idl, idt = layout.id_origin_mm
     cp, rp = layout.id_col_pitch_mm, layout.id_row_pitch_mm
-    box_x0 = mm(idl - 6); box_y0 = mm(idt - 18)
-    box_x1 = mm(idl + (cfg.id_digits - 1) * cp + 6); box_y1 = mm(idt + 9 * rp + 6)
+    box_x0 = px0
+    box_x1 = mm(idl + (cfg.id_digits - 1) * cp + 6)
+    box_y0 = mm(mt + 71)
+    box_y1 = mm(idt + 9 * rp + 5)
     d.rectangle([box_x0, box_y0, box_x1, box_y1], outline=_NAVY, width=mm(0.5))
-    d.text((box_x0 + mm(2), box_y0 + mm(1.5)), "수 험 번 호", font=font(9.5, True), fill=_NAVY)
-    d.text((box_x0 + mm(2), box_y0 + mm(6.5)), "(왼쪽부터 4~5자리)", font=font(7.5), fill=_INK)
-    # 상단 기입 칸
+    d.text((box_x0 + mm(3), box_y0 + mm(2)), "수 험 번 호", font=font(9.5, True), fill=_NAVY)
+    d.text((box_x0 + mm(3), box_y0 + mm(6.5)), "(왼쪽부터 4~5자리 기입)", font=font(7.2), fill=_INK)
+    # 상단 기입 칸 (버블 위, 겹치지 않게)
+    write_y0 = mm(mt + 79.5)
     for col in range(cfg.id_digits):
         cx = mm(idl + col * cp)
-        d.rectangle([cx - mm(3.4), box_y0 + mm(11), cx + mm(3.4), box_y0 + mm(17)],
+        d.rectangle([cx - mm(3.2), write_y0, cx + mm(3.2), write_y0 + mm(5.5)],
                     outline=_BORDER, width=mm(0.4))
     # 0~9 버블 (흰 내부 + 분홍 외곽 + 숫자)
     r = mm(layout.bubble_radius_mm)
-    bf = font(6.5)
+    bf = font(6.3)
     for b in layout.bubbles:
         if b.role != "id":
             continue
@@ -334,12 +355,12 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
 
     # --- 감독관 확인 ---
     gv_y0 = box_y1 + mm(4)
-    d.rectangle([box_x0, gv_y0, box_x1, gv_y0 + mm(16)], outline=_BORDER, width=mm(0.4))
-    d.text((box_x0 + mm(2), gv_y0 + mm(1.5)), "감독관 확인", font=font(9, True), fill=_INK)
-    d.text((box_x0 + mm(2), gv_y0 + mm(7)), "(서명 또는 날인)", font=font(7.5), fill=_INK)
+    d.rectangle([box_x0, gv_y0, box_x1, gv_y0 + mm(15)], outline=_BORDER, width=mm(0.4))
+    d.text((box_x0 + mm(3), gv_y0 + mm(2)), "감독관 확인", font=font(9, True), fill=_INK)
+    d.text((box_x0 + mm(3), gv_y0 + mm(7.5)), "(서명 또는 날인)", font=font(7.2), fill=_INK)
 
-    # --- 문항 (3단, 5행 그룹 음영 + 5의 배수 굵게) ---
-    per_col = cfg.questions_per_column or 15
+    # --- 문항 (다단, 5행 그룹 음영 + 5의 배수 굵게) ---
+    per_col = cfg.questions_per_column or 20
     qbycol: dict = {}
     for b in layout.bubbles:
         if b.role != "question":
@@ -348,14 +369,13 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
 
     cpitch = layout.q_choice_pitch_mm
     rpitch = layout.q_row_pitch_mm
-    qf = font(9, True)
     cf = font(6.3)
+    header_y = mm(mt + 24)   # 첫 문항행(mt+37)과 충분히 이격
     for col_i, qmap in sorted(qbycol.items()):
         qnos = sorted(qmap)
         first_b = sorted(qmap[qnos[0]], key=lambda b: b.value)[0]
         col_left = first_b.x_mm - 13
         col_right = first_b.x_mm + (cfg.num_choices - 1) * cpitch + 4
-        header_y = mm(mt + 22)
         # 헤더 바
         d.rounded_rectangle([mm(col_left), header_y, mm(col_right), header_y + mm(6)],
                             radius=mm(1), fill=_NAVY)
@@ -381,13 +401,29 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                      mm(sorted(qmap[qnos[-1]], key=lambda b: b.value)[0].y_mm + rpitch / 2)],
                     outline=_BORDER, width=mm(0.4))
 
-    # --- 학원 로고/이름 (우하단 구석) ---
+    # --- 학원 로고 (우하단 구석) ---
     academy = cfg.academy or "○○학원"
-    lg = mm(7.5)
-    ac_w = mm(2 + 4 * len(academy))
-    lx, ly = mm(mr) - mm(2) - ac_w - lg, mm(mb - 6)
-    _brand_mark(d, lx, ly, lg, academy[0], font(4.5, True))
-    d.text((lx + lg + mm(2), ly + lg / 2 - mm(2.4)), academy, font=font(9.5, True), fill=_NAVY)
+    logo_path = cfg.academy_logo
+    placed = False
+    if logo_path and os.path.exists(logo_path):
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            target_h = mm(22)
+            target_w = int(logo.width * target_h / logo.height)
+            logo = logo.resize((target_w, target_h), Image.LANCZOS)
+            bg = Image.new("RGBA", logo.size, (255, 255, 255, 0))
+            bg.alpha_composite(logo)
+            x1, y1 = mm(mr - 9), mm(mb - 8)
+            img.paste(bg.convert("RGB"), (x1 - target_w, y1 - target_h), bg)
+            placed = True
+        except Exception:
+            placed = False
+    if not placed:
+        lg = mm(9)
+        ac_w = mm(2 + 4.2 * len(academy))
+        lx, ly = mm(mr) - mm(6) - ac_w - lg, mm(mb - 16)
+        _brand_mark(d, lx, ly, lg, academy[0], font(5.5, True))
+        d.text((lx + lg + mm(2), ly + lg / 2 - mm(2.4)), academy, font=font(10, True), fill=_NAVY)
 
     return img
 

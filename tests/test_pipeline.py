@@ -69,7 +69,7 @@ def test_read_roundtrip_accuracy():
 def test_exam_style_roundtrip_and_left_aligned_id():
     d = _tmp()
     cfg = SheetConfig(exam_id="EX", title="모의고사 답안지", num_questions=45,
-                      num_choices=5, id_digits=5, questions_per_column=15,
+                      num_choices=5, id_digits=5, questions_per_column=20,
                       style="exam", period="3", subject_label="영어 영역",
                       academy="테스트학원")
     res = generate(cfg, d, dpi=200, make_preview=False)

@@ -35,6 +35,7 @@ class SheetConfig:
     period: str = ""              # 교시 표기 (예: "3")
     subject_label: str = ""       # 영역 표기 (예: "영어 영역")
     academy: str = ""             # 학원명 (구석 로고 옆)
+    academy_logo: str = ""        # 학원 로고 이미지 경로(있으면 우하단에 배치)
 
 
 @dataclass
@@ -248,10 +249,11 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     qr_xy = (m_right - 15 - qr_size, m_top + 1)   # TR 마커와 겹치지 않게 왼쪽으로
 
     # --- 좌측 패널: 수험번호 그리드 (4~5자리, 왼쪽부터 채워쓰기) ---
+    # 성명·학교/학년·수강반 박스 아래로 충분히 내려 간섭 제거.
     id_left = m_left + 12
-    id_top = m_top + 58          # 성명 박스 아래
+    id_top = m_top + 88
     id_col_pitch = 9.0
-    id_row_pitch = 8.4
+    id_row_pitch = 6.6
     id_origin = (id_left, id_top)
     for col in range(config.id_digits):
         cx = id_left + col * id_col_pitch
@@ -260,17 +262,17 @@ def build_exam_layout(config: SheetConfig) -> Layout:
             u, v = norm(cx, cy)
             bubbles.append(Bubble("id", col, digit, cx, cy, u, v))
 
-    # --- 우측: 3단 문항 ---
+    # --- 우측: 3단 문항 (수능식 20/20/5 등) ---
     n = config.num_questions
-    per_col = config.questions_per_column or 15
+    per_col = config.questions_per_column or 20
     num_cols = (n + per_col - 1) // per_col
     q_area_left = m_left + 78     # 좌측 패널 오른쪽부터
     q_area_right = m_right - 4
     col_pitch = (q_area_right - q_area_left) / num_cols
     choice_pitch = 6.6
     label_gap = 13.0
-    q_top = m_top + 30           # 상단 안내문 아래
-    q_bottom_limit = m_bottom - 4
+    q_top = m_top + 37           # 헤더행(문번/답란)과 1·21·41번 간섭 방지
+    q_bottom_limit = m_bottom - 9  # 최하단 행이 가장자리 왜곡 영역에 닿지 않도록 여유
     rows = min(per_col, n)
     row_pitch = min(9.5, (q_bottom_limit - q_top) / (rows - 1)) if rows > 1 else 9.5
 
