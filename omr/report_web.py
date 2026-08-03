@@ -16,7 +16,8 @@ import json
 import os
 from dataclasses import dataclass
 
-from .scorer import AnswerKey, score_one, score_batch, english_analysis
+from .scorer import (AnswerKey, score_one, score_batch, english_analysis,
+                     cohort_analysis)
 
 
 DEFAULT_SALT = os.environ.get("OMR_REPORT_SALT", "omr-demo-salt-change-me")
@@ -105,10 +106,17 @@ REPORT_CSS = """
   .bar-label{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:5px; font-size:12px; }
   .bar-label strong{ font-weight:700; }
   .bar-label span{ color:var(--muted); }
-  .bar-track{ height:9px; background:#e9eef5; border-radius:99px; overflow:hidden; }
+  .bar-track{ height:9px; background:#e9eef5; border-radius:99px; overflow:hidden; position:relative; }
   .bar-track i{ height:100%; display:block; border-radius:inherit;
     background:linear-gradient(90deg,var(--navy),var(--blue)); }
   .bar-track.avg i{ background:linear-gradient(90deg,#9aa8bd,#c2ccdb); }
+  .bar-track.marked{ overflow:visible; }
+  .bar-mark{ position:absolute; top:-3px; height:15px; width:2px; background:var(--gold);
+    border-radius:2px; box-shadow:0 0 0 1px rgba(255,255,255,.75); }
+  .cohort-legend{ display:flex; align-items:center; gap:6px; margin-top:12px;
+    color:var(--muted); font-size:11px; }
+  .cohort-legend i{ display:inline-block; width:2px; height:12px; background:var(--gold);
+    border-radius:2px; }
   .qgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(52px,1fr)); gap:6px; }
   .qcell{ min-height:48px; border:1px solid #dce3ec; border-radius:8px; display:flex;
     flex-direction:column; align-items:center; justify-content:center; }
@@ -177,12 +185,18 @@ def _grade_band(percentile: float) -> tuple:
     return "집중 보완 권장", "#9a2020", "var(--danger-soft)"
 
 
-def _bar(label: str, value: float, total: float, detail: str, avg: bool = False) -> str:
+def _bar(label: str, value: float, total: float, detail: str, avg: bool = False,
+         marker: float | None = None) -> str:
     pct = max(0.0, min(100.0, (value / total * 100) if total else 0))
     cls = "bar-track avg" if avg else "bar-track"
+    inner = f'<i style="width:{pct:.1f}%"></i>'
+    if marker is not None:
+        mk = max(0.0, min(100.0, (marker / total * 100) if total else 0))
+        cls += " marked"
+        inner += f'<b class="bar-mark" style="left:{mk:.1f}%" title="집단 평균 {marker:g}"></b>'
     return (f'<div class="bar-row"><div class="bar-label"><strong>{html.escape(label)}</strong>'
             f'<span>{html.escape(detail)}</span></div>'
-            f'<div class="{cls}"><i style="width:{pct:.1f}%"></i></div></div>')
+            f'<div class="{cls}">{inner}</div></div>')
 
 
 def _question_cells(questions: list) -> str:
@@ -279,21 +293,33 @@ def render_report_body(meta: ExamMeta, student: dict, result: dict,
 </article></div>"""
 
 
-def _category_panel(title: str, sub: str, stats: list) -> str:
+def _category_panel(title: str, sub: str, stats: list, cohort: dict | None = None) -> str:
     if not stats:
         return ""
-    bars = "".join(
-        _bar(s["name"], s["rate"], 100.0,
-             f'{s["correct"]}/{s["count"]}문항 · {s["earned"]:g}/{s["possible"]:g}점 · {s["rate"]:g}%')
-        for s in stats
-    )
+    cohort = cohort or {}
+    rows = []
+    has_cohort = False
+    for s in stats:
+        cav = cohort.get(s["name"])
+        detail = f'{s["correct"]}/{s["count"]}문항 · 내 {s["rate"]:g}%'
+        if cav is not None:
+            detail += f' · 평균 {cav:g}%'
+            has_cohort = True
+        rows.append(_bar(s["name"], s["rate"], 100.0, detail, marker=cav))
+    legend = ('<div class="cohort-legend"><i></i> 금색 선 = 응시 집단 평균</div>'
+              if has_cohort else "")
     return (f'<section class="panel"><div class="panel-title"><h4>{html.escape(title)}</h4>'
-            f'<span>{html.escape(sub)}</span></div>{bars}</section>')
+            f'<span>{html.escape(sub)}</span></div>{"".join(rows)}{legend}</section>')
 
 
 def render_english_report_body(meta: ExamMeta, student: dict, result: dict,
-                               questions: list, review_flags: list, analysis: dict) -> str:
-    """영어 모의고사 전용 성적표 본문 (네이비 톤 공유 + 등급·영역·유형 분석)."""
+                               questions: list, review_flags: list, analysis: dict,
+                               cohort: dict | None = None) -> str:
+    """영어 모의고사 전용 성적표 본문 (네이비 톤 공유 + 등급·영역·유형 분석).
+
+    cohort: {"area":{유형:평균%}, "type":{...}, "difficulty":{...}} — 집단 평균 비교용.
+    """
+    cohort = cohort or {}
     name = html.escape(student.get("name") or "")
     sid = html.escape(str(student.get("student_id") or ""))
     title = html.escape(meta.title)
@@ -334,21 +360,33 @@ def render_english_report_body(meta: ExamMeta, student: dict, result: dict,
              f'{result["class_mean"]:g}점 · 표준편차 {result["class_std"]:g}', avg=True)
     )
 
-    # 영역별(듣기/독해) 카드
+    # 영역별(듣기/독해) 카드 — 집단 평균 마커 포함
+    cohort_area = cohort.get("area", {})
     area_cards = ""
+    area_has_cohort = False
     for a in analysis.get("area_stats", []):
+        cav = cohort_area.get(a["name"])
+        mark = (f'<b class="bar-mark" style="left:{max(0, min(100, cav)):.1f}%"></b>'
+                if cav is not None else "")
+        track_cls = "bar-track marked" if cav is not None else "bar-track"
+        avg_txt = f' · 집단 평균 {cav:g}%' if cav is not None else ""
+        if cav is not None:
+            area_has_cohort = True
         area_cards += (f'<div class="area-card"><div class="a-top"><h5>{html.escape(a["name"])}</h5>'
                        f'<span class="a-rate">{a["rate"]:g}%</span></div>'
-                       f'<div class="bar-track"><i style="width:{a["rate"]:.1f}%"></i></div>'
+                       f'<div class="{track_cls}"><i style="width:{a["rate"]:.1f}%"></i>{mark}</div>'
                        f'<div class="a-sub">{a["correct"]}/{a["count"]}문항 정답 · '
-                       f'{a["earned"]:g}/{a["possible"]:g}점</div></div>')
+                       f'{a["earned"]:g}/{a["possible"]:g}점{avg_txt}</div></div>')
+    area_legend = ('<div class="cohort-legend"><i></i> 금색 선 = 응시 집단 평균</div>'
+                   if area_has_cohort else "")
     area_section = (f'<section class="panel"><div class="panel-title"><h4>영역별 성취</h4>'
                     f'<span>배점 기준</span></div><div class="area-cards">{area_cards}</div>'
-                    f'</section>') if area_cards else ""
+                    f'{area_legend}</section>') if area_cards else ""
 
-    # 유형별 분석 + 약점 안내
+    # 유형별 분석 + 약점 안내 (집단 평균 대비)
     type_stats = analysis.get("type_stats", [])
-    type_panel = _category_panel("유형별 성취율", "정답 배점 기준 · 낮은 순 확인", type_stats)
+    type_panel = _category_panel("유형별 성취율", "내 성취율 vs 집단 평균 · 낮은 순 확인",
+                                 type_stats, cohort.get("type"))
     weak_note = ""
     weak = [t for t in type_stats if t["rate"] < 60][-3:]
     if weak:
@@ -357,7 +395,7 @@ def render_english_report_body(meta: ExamMeta, student: dict, result: dict,
                      f'{names} 영역의 성취율이 낮습니다. 해당 유형 문항 풀이를 집중 권장합니다.</div>')
 
     diff_panel = _category_panel("난이도별 성취율", "상·중·하 배점 기준",
-                                 analysis.get("difficulty_stats", []))
+                                 analysis.get("difficulty_stats", []), cohort.get("difficulty"))
 
     qcells = _question_cells(questions)
 
@@ -416,10 +454,12 @@ def render_english_report_body(meta: ExamMeta, student: dict, result: dict,
 
 def render_report_html(meta: ExamMeta, student: dict, result: dict,
                        questions: list, review_flags: list,
-                       analysis: dict | None = None, font_cdn: bool = True) -> str:
+                       analysis: dict | None = None, font_cdn: bool = True,
+                       cohort: dict | None = None) -> str:
     """단독 열람용 완성 HTML 문서. report_type에 따라 본문을 선택."""
     if meta.report_type == "english" and analysis is not None:
-        body = render_english_report_body(meta, student, result, questions, review_flags, analysis)
+        body = render_english_report_body(meta, student, result, questions, review_flags,
+                                          analysis, cohort)
     else:
         body = render_report_body(meta, student, result, questions, review_flags)
     title = html.escape(meta.title)
@@ -453,6 +493,7 @@ def build_reports(records: list, key: AnswerKey, meta: ExamMeta, out_dir: str,
 
     scored = score_batch(records, key)
     scored_by = {s["student_id"]: s for s in scored}
+    cohort = cohort_analysis(records, key) if meta.report_type == "english" else None
 
     entries = []
     for rec in records:
@@ -477,7 +518,8 @@ def build_reports(records: list, key: AnswerKey, meta: ExamMeta, out_dir: str,
         result = {**s, **detail}
         analysis = english_analysis(rec["answers"], key) if meta.report_type == "english" else None
         htmldoc = render_report_html(meta, student, result, questions,
-                                     rec.get("review_flags", []), analysis=analysis)
+                                     rec.get("review_flags", []), analysis=analysis,
+                                     cohort=cohort)
         with open(os.path.join(reports_dir, fname), "w", encoding="utf-8") as fp:
             fp.write(htmldoc)
 

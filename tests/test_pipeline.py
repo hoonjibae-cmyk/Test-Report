@@ -218,16 +218,21 @@ def test_english_report_build():
         qmeta={q: {"area": "듣기" if q <= 5 else "독해",
                    "type": f"유형{q}", "difficulty": "중"} for q in range(1, 11)},
     )
-    records = [{"student_id": "20250001", "name": "홍길동",
-                "answers": {q: (1 if q <= 8 else 2) for q in range(1, 11)}}]  # 80점 → 2등급
+    records = [
+        {"student_id": "20250001", "name": "홍길동",
+         "answers": {q: (1 if q <= 8 else 2) for q in range(1, 11)}},   # 80점 → 2등급
+        {"student_id": "20250002", "name": "김영희",
+         "answers": {q: (1 if q <= 4 else 2) for q in range(1, 11)}},   # 40점
+    ]
     d = _tmp()
     meta = ExamMeta(exam_id="ENG", title="영어모의", school="테스트중", report_type="english")
     out = build_reports(records, key, meta, d, salt="s")
-    e = out["entries"][0]
-    assert e["grade"] == 2
-    doc = open(os.path.join(out["dir"], e["file"]), encoding="utf-8").read()
+    top = min(out["entries"], key=lambda x: x["rank"])
+    assert top["grade"] == 2
+    doc = open(os.path.join(out["dir"], top["file"]), encoding="utf-8").read()
     assert "등급" in doc and "영역별 성취" in doc and "유형별 성취율" in doc
-    assert "Pretendard" in doc   # 폰트 링크 포함
+    assert "Pretendard" in doc                    # 폰트 링크 포함
+    assert "bar-mark" in doc and "집단 평균" in doc  # 집단 평균 마커 포함
 
 
 def test_scorer_stats():

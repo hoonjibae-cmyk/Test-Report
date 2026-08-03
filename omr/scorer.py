@@ -84,6 +84,35 @@ def category_stats(answers: dict, key: AnswerKey, field_name: str) -> list[dict]
     return out
 
 
+def cohort_category_stats(records: list, key: AnswerKey, field_name: str) -> dict:
+    """응시 집단 전체의 필드별 평균 성취율. {유형명: rate(%)}.
+
+    rate = (집단 정답 배점 합) / (집단 배점 합) × 100.
+    """
+    groups: dict = {}
+    for rec in records:
+        ans = rec.get("answers", {})
+        for q in key.answers:
+            name = key.qmeta.get(q, {}).get(field_name)
+            if not name:
+                continue
+            g = groups.setdefault(name, {"earned": 0.0, "possible": 0.0})
+            g["possible"] += key.points[q]
+            if ans.get(q) == key.answers[q]:
+                g["earned"] += key.points[q]
+    return {k: (round(v["earned"] / v["possible"] * 100, 1) if v["possible"] else 0.0)
+            for k, v in groups.items()}
+
+
+def cohort_analysis(records: list, key: AnswerKey) -> dict:
+    """집단 평균(영역·유형·난이도별)을 한 번에 계산."""
+    return {
+        "area": cohort_category_stats(records, key, "area"),
+        "type": cohort_category_stats(records, key, "type"),
+        "difficulty": cohort_category_stats(records, key, "difficulty"),
+    }
+
+
 def english_analysis(answers: dict, key: AnswerKey) -> dict:
     """영어 모의고사 심화 분석: 등급 + 영역별/유형별/난이도별 성취율."""
     detail = score_one(answers, key)
