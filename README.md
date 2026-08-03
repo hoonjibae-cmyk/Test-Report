@@ -172,6 +172,34 @@ python -m omr.cli generate --style exam \
 ```
 `answers`는 문항→정답 보기(1-base). `points`는 문항별 배점(생략 시 `default_point`).
 
+## 웹앱 (업무용 UI)
+
+CLI 대신 **웹 브라우저에서 전 과정을 처리**하는 FastAPI 앱(`webapp/`)이 있습니다.
+OMR 핵심 로직(`omr` 패키지)을 그대로 재사용합니다.
+
+```bash
+pip install -r requirements.txt
+python -m uvicorn webapp.app:app --host 0.0.0.0 --port 8000
+#  → 브라우저에서 http://localhost:8000
+```
+
+업무 흐름(한 화면에서):
+1. **새 시험 만들기** — 제목·유형(기본/영어)·답안지 구성 입력
+2. **① 답안지(OMR) 출력** — 미리보기 + PDF 다운로드(시험 전 인쇄·배부)
+3. **② 정답키 입력** — 문항별 정답 클릭(영어는 표준 유형·배점·등급컷 자동 적용)
+4. **③ 스캔 판독·채점** — 마킹된 답안지 이미지 업로드 → 자동 판독·채점(석차·등급 표)
+5. **④ 웹 성적표 생성** — 응시자별 링크 생성(학부모 열람·알림톡 발송용)
+
+시험 데이터는 `data/exams/<시험코드>/`에 파일로 저장됩니다(`OMR_DATA_DIR`로 변경 가능).
+학원 로고는 `assets/academy-logo.png`를 자동 사용합니다.
+
+| 파일 | 역할 |
+|------|------|
+| `webapp/app.py`     | FastAPI 라우트(시험·OMR·정답키·판독·성적표) |
+| `webapp/storage.py` | 시험 설정 저장 + SheetConfig/AnswerKey 파생, 영어 표준 구성 |
+| `webapp/templates/` | 화면(대시보드·시험 생성·시험 관리) — 네이비 톤 |
+| `webapp/static/`    | 스타일시트 |
+
 ## 모듈 구조
 
 | 파일 | 역할 |

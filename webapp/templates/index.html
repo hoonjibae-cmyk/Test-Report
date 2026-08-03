@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+  <div>
+    <p class="eyebrow">EXAM DASHBOARD</p>
+    <h1 style="margin:0;font-size:24px;letter-spacing:-.03em">시험 목록</h1>
+  </div>
+  <a class="btn primary" href="/exams/new">+ 새 시험 만들기</a>
+</div>
+
+{% if exams %}
+<div class="exam-list">
+  {% for e in exams %}
+  <a class="exam-card" href="/exams/{{ e.exam_id }}">
+    <div>
+      {% if e.report_type == 'english' %}<span class="chip eng">영어 모의고사</span>
+      {% else %}<span class="chip basic">기본</span>{% endif %}
+    </div>
+    <div class="t">{{ e.title }}</div>
+    <div class="m">{{ e.date or '날짜 미정' }} · {{ e.sheet.num_questions }}문항 · {{ e.school or e.academy }}</div>
+    <div class="m">코드: {{ e.exam_id }}</div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><p class="empty">아직 만든 시험이 없습니다. <b>새 시험 만들기</b>로 시작하세요.</p></div>
+{% endif %}
+{% endblock %}

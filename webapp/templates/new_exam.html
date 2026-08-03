@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}새 시험 만들기{% endblock %}
+{% block body %}
+<p class="crumb"><a href="/">시험 목록</a> › 새 시험 만들기</p>
+<form method="post" action="/exams/new">
+<div class="card">
+  <h2>시험 정보</h2>
+  <p class="sub">답안지·성적표에 표시될 정보입니다. 시험 후 정답키를 입력하면 채점됩니다.</p>
+  <div class="grid2">
+    <div><label>시험 제목 *</label>
+      <input type="text" name="title" required placeholder="예: 고1 3월 전국연합학력평가 · 영어영역"></div>
+    <div><label>시험 코드(선택)</label>
+      <input type="text" name="exam_id" placeholder="비우면 자동 생성">
+      <div class="hint">답안지 QR·성적표 링크에 사용됩니다.</div></div>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div><label>성적표 유형</label>
+      <select name="report_type" id="rt">
+        <option value="english">영어 모의고사 (등급·유형 분석)</option>
+        <option value="basic">기본 (점수·석차)</option>
+      </select></div>
+    <div><label>시험일</label><input type="date" name="date"></div>
+    <div><label>학교·반</label><input type="text" name="school" placeholder="예: 한빛중 3-2"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>답안지(OMR) 구성</h2>
+  <p class="sub">수능형은 가로 A4 · 성명/학교/수강반 · 수험번호(왼쪽부터) · 3단 문항으로 출력됩니다.</p>
+  <div class="grid3">
+    <div><label>답안지 스타일</label>
+      <select name="style">
+        <option value="exam">수능형 (가로)</option>
+        <option value="basic">기본형 (세로)</option>
+      </select></div>
+    <div><label>문항 수</label><input type="number" name="num_questions" value="45" min="1" max="120"></div>
+    <div><label>보기 수</label><input type="number" name="num_choices" value="5" min="2" max="8"></div>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div><label>수험번호 자리수</label><input type="number" name="id_digits" value="5" min="3" max="9"></div>
+    <div><label>문항 열당 개수</label><input type="number" name="per_column" value="20" min="5" max="30">
+      <div class="hint">45문항이면 20 → 20/20/5 배치</div></div>
+    <div><label>기본 배점</label><input type="number" name="default_point" value="2" step="0.5"></div>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div><label>교시(선택)</label><input type="text" name="period" placeholder="예: 3"></div>
+    <div><label>영역 표기(선택)</label><input type="text" name="subject_label" placeholder="예: 영어 영역"></div>
+    <div><label>학원명</label><input type="text" name="academy" value="목동유쌤영어학원"></div>
+  </div>
+</div>
+
+<div class="row-actions">
+  <button class="btn primary" type="submit">시험 만들기</button>
+  <a class="btn ghost" href="/">취소</a>
+</div>
+</form>
+{% endblock %}

@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}{{ exam.title }}{% endblock %}
+{% block body %}
+<p class="crumb"><a href="/">시험 목록</a> › {{ exam.title }}</p>
+
+<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px">
+  <div>
+    {% if exam.report_type=='english' %}<span class="chip eng">영어 모의고사</span>{% else %}<span class="chip basic">기본</span>{% endif %}
+    <h1 style="margin:6px 0 2px;font-size:23px;letter-spacing:-.03em">{{ exam.title }}</h1>
+    <div class="m" style="color:var(--muted);font-size:13px">
+      {{ exam.date or '날짜 미정' }} · {{ exam.school }} · 코드 {{ exam.exam_id }} · {{ exam.sheet.num_questions }}문항</div>
+  </div>
+  <form method="post" action="/exams/{{ exam.exam_id }}/delete" onsubmit="return confirm('이 시험을 삭제할까요?')">
+    <button class="btn danger sm">삭제</button>
+  </form>
+</div>
+
+<!-- 1. OMR 답안지 -->
+<div class="card">
+  <h2><span class="step">1</span>답안지(OMR) 출력</h2>
+  <p class="sub">시험 <b>전에</b> 답안지를 출력해 배부하세요. 실제 크기(100%)로 인쇄해야 판독이 정확합니다.</p>
+  <div class="grid2" style="align-items:start">
+    <img class="preview" src="/exams/{{ exam.exam_id }}/omr.png?ts={{ exam.created_at }}" alt="OMR 미리보기">
+    <div>
+      <div class="row-actions">
+        <a class="btn primary" href="/exams/{{ exam.exam_id }}/omr.pdf" target="_blank">📄 PDF 다운로드</a>
+        <a class="btn ghost" href="/exams/{{ exam.exam_id }}/omr.png" target="_blank">이미지 보기</a>
+      </div>
+      <p class="hint" style="margin-top:12px">스타일: {{ '수능형(가로)' if exam.sheet.style=='exam' else '기본형(세로)' }}
+        · 수험번호 {{ exam.sheet.id_digits }}자리(왼쪽부터) · 보기 {{ exam.sheet.num_choices }}지</p>
+    </div>
+  </div>
+</div>
+
+<!-- 2. 정답키 -->
+<span class="anchor" id="key"></span>
+<div class="card">
+  <h2><span class="step">2</span>정답키 입력
+    {% if key_entered==key_total %}<span class="chip ok" style="margin-left:8px">완료 {{ key_entered }}/{{ key_total }}</span>
+    {% else %}<span class="chip wait" style="margin-left:8px">{{ key_entered }}/{{ key_total }}</span>{% endif %}
+  </h2>
+  <p class="sub">각 문항의 정답 보기를 선택하세요. 채점·성적표의 기준이 됩니다.</p>
+  {% if exam.report_type=='english' %}
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+    <form method="post" action="/exams/{{ exam.exam_id }}/apply-standard">
+      <button class="btn gold sm" type="submit">영어 표준 유형·배점·등급컷 자동 적용</button>
+    </form>
+    <span class="hint">듣기17+독해28, 3점 문항, 등급컷을 자동 채웁니다(정답만 입력하면 됨).</span>
+  </div>
+  {% endif %}
+  <form method="post" action="/exams/{{ exam.exam_id }}/key">
+    <div class="keygrid">
+      {% for q in range(1, key_total+1) %}
+      <div class="qrow">
+        <div class="qn">{{ q }}</div>
+        <div class="opts">
+          {% for c in range(1, exam.sheet.num_choices+1) %}
+          <input type="radio" id="q{{q}}_{{c}}" name="q{{q}}" value="{{c}}"
+            {% if exam.key.answers.get(q|string)==c %}checked{% endif %}>
+          <label for="q{{q}}_{{c}}">{{ c }}</label>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% if exam.report_type=='english' %}
+    <div style="margin-top:16px;max-width:520px">
+      <label>절대평가 등급컷 (내림차순, 쉼표)</label>
+      <input type="text" name="grade_cuts" value="{{ exam.key.grade_cuts|join(', ') }}" placeholder="90, 80, 70, 60, 50, 40, 30, 20">
+    </div>
+    {% endif %}
+    <div class="row-actions"><button class="btn primary" type="submit">정답키 저장</button></div>
+  </form>
+</div>
+
+<!-- 3. 채점 -->
+<span class="anchor" id="score"></span>
+<div class="card">
+  <h2><span class="step">3</span>스캔 판독 · 채점</h2>
+  <p class="sub">마킹된 답안지 스캔 이미지를 업로드하면 자동 판독·채점합니다. (스캐너 200~300dpi 권장)</p>
+  <form method="post" action="/exams/{{ exam.exam_id }}/scans" enctype="multipart/form-data">
+    <div class="grid2" style="align-items:start">
+      <div><label>스캔 이미지 (여러 장 선택 가능)</label>
+        <input type="file" name="files" accept="image/*" multiple required></div>
+      <div><label>명렬(선택) — 학번→이름·학교·반 JSON</label>
+        <input type="file" name="roster" accept="application/json">
+        <div class="hint">[{"id":"1234","name":"홍길동","school":"한빛중","class":"월수반"}]</div></div>
+    </div>
+    <div class="row-actions">
+      <button class="btn primary" type="submit" {% if key_entered<key_total %}title="정답키를 먼저 입력하면 점수까지 계산됩니다"{% endif %}>업로드 · 판독 · 채점</button>
+      <span class="hint">현재 업로드된 스캔: {{ scan_count }}장</span>
+    </div>
+  </form>
+
+  {% if results %}
+  <div style="margin-top:18px">
+    {% if results.problems %}
+    <div style="background:var(--warn-soft);border:1px solid #f4dca6;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:#6f4a0a">
+      ⚠️ 판독 확인 필요 {{ results.problems|length }}건: {% for p in results.problems %}{{ p.file }}({{ p.error }}){% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+    <table>
+      <tr><th>석차</th><th>이름</th><th>학번</th><th>점수</th>{% if exam.report_type=='english' %}<th>등급</th>{% endif %}<th>정답</th><th>검수</th></tr>
+      {% for s in results.scored|sort(attribute='rank') %}
+      <tr>
+        <td class="num">{{ s.rank }}</td><td>{{ s.name or '—' }}</td><td class="num">{{ s.student_id }}</td>
+        <td class="num"><b>{{ s.raw_score }}</b> / {{ s.total_points }}</td>
+        {% if exam.report_type=='english' %}<td><span class="gradepill">{{ results.grades.get(s.student_id, '-') if results.grades is defined else '-' }}</span></td>{% endif %}
+        <td class="num">{{ s.num_correct }}/{{ key_total }}</td>
+        <td>{% set rec = (results.records|selectattr('student_id','equalto',s.student_id)|first) %}
+          {% if rec and rec.review_flags %}<span class="flag">{{ rec.review_flags|length }}건</span>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="empty" style="margin-top:12px">아직 판독 결과가 없습니다.</p>
+  {% endif %}
+</div>
+
+<!-- 4. 성적표 -->
+<span class="anchor" id="report"></span>
+<div class="card">
+  <h2><span class="step">4</span>웹 성적표 생성</h2>
+  <p class="sub">응시자별 웹 성적표(링크)를 만듭니다. 링크는 학부모 열람·알림톡 발송에 사용됩니다.</p>
+  <form method="post" action="/exams/{{ exam.exam_id }}/reports">
+    <div style="max-width:560px"><label>링크 접두사(선택)</label>
+      <input type="text" name="base_url" placeholder="비우면 이 서버 경로로 생성 (배포 시 https://reports... 입력)"></div>
+    <div class="row-actions">
+      <button class="btn primary" type="submit" {% if not results %}disabled{% endif %}>성적표 생성</button>
+      {% if not results %}<span class="hint">먼저 스캔을 판독·채점하세요.</span>{% endif %}
+    </div>
+  </form>
+
+  {% if manifest %}
+  <div style="margin-top:16px">
+    <div class="m" style="color:var(--muted);font-size:13px;margin-bottom:8px">생성됨 {{ manifest.count }}건 · 클릭하면 성적표가 열립니다.</div>
+    <div class="linklist">
+      {% for e in manifest.entries|sort(attribute='rank') %}
+      <a class="linkrow" href="/exams/{{ exam.exam_id }}/reports/view/{{ e.file }}" target="_blank">
+        <span><span class="nm">{{ e.name or e.student_id }}</span>
+          <span class="sc"> · {{ e.rank }}등 · {{ e.score }}점{% if e.grade %} · {{ e.grade }}등급{% endif %}</span></span>
+        <span class="sc">열람 ↗</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
