@@ -55,15 +55,43 @@ def compute_grade(raw: float, cuts: list) -> int | None:
     return len(cuts) + 1
 
 
-def category_stats(answers: dict, key: AnswerKey, field_name: str) -> list[dict]:
-    """문항 메타의 특정 필드(area/type/difficulty)별 성취율 집계.
+# 영어 독해 세부 유형 → 대분류 매핑(정답키에 category가 없을 때 자동 적용).
+# 표준 수능·모의고사 유형 분류를 따른다.
+CATEGORY_MAP = {
+    # 대의 파악
+    "목적": "대의 파악", "심경·분위기": "대의 파악", "심경": "대의 파악",
+    "주장": "대의 파악", "함의 추론": "대의 파악", "요지": "대의 파악",
+    "주제": "대의 파악", "제목": "대의 파악",
+    # 세부 내용
+    "내용 일치": "세부 내용", "도표 일치": "세부 내용", "도표": "세부 내용",
+    "실용문": "세부 내용", "지칭 추론": "세부 내용",
+    # 어법·어휘
+    "어법": "어법·어휘", "어휘": "어법·어휘",
+    # 빈칸 추론
+    "빈칸 추론": "빈칸 추론",
+    # 간접 쓰기
+    "무관한 문장": "간접 쓰기", "글의 순서": "간접 쓰기",
+    "문장 삽입": "간접 쓰기", "문단 요약": "간접 쓰기",
+    # 장문 독해
+    "장문 독해": "장문 독해",
+}
+# 대분류 표시 순서(성취율과 무관하게 교육과정 흐름 순)
+CATEGORY_ORDER = ["대의 파악", "세부 내용", "어법·어휘", "빈칸 추론", "간접 쓰기", "장문 독해"]
 
-    반환: [{"name","earned","possible","correct","count","rate"}] (성취율 내림차순).
-    """
+
+def resolve_reading_category(key: AnswerKey, q: int) -> str | None:
+    """문항 q의 독해 대분류. 듣기 문항은 제외(None)."""
+    m = key.qmeta.get(q, {})
+    if m.get("area") == "듣기":
+        return None
+    return m.get("category") or CATEGORY_MAP.get(m.get("type")) or m.get("type")
+
+
+def _group_stats(answers: dict, key: AnswerKey, keyfunc, order=None) -> list[dict]:
+    """keyfunc(q)로 문항을 묶어 성취율 집계. order 지정 시 그 순서, 아니면 성취율 내림차순."""
     groups: dict = {}
     for q in key.answers:
-        meta = key.qmeta.get(q, {})
-        name = meta.get(field_name)
+        name = keyfunc(q)
         if not name:
             continue
         g = groups.setdefault(name, {"name": name, "earned": 0.0, "possible": 0.0,
@@ -80,20 +108,31 @@ def category_stats(answers: dict, key: AnswerKey, field_name: str) -> list[dict]
         g["earned"] = round(g["earned"], 3)
         g["possible"] = round(g["possible"], 3)
         out.append(g)
-    out.sort(key=lambda x: x["rate"], reverse=True)
+    if order:
+        idx = {n: i for i, n in enumerate(order)}
+        out.sort(key=lambda x: idx.get(x["name"], len(order)))
+    else:
+        out.sort(key=lambda x: x["rate"], reverse=True)
     return out
 
 
-def cohort_category_stats(records: list, key: AnswerKey, field_name: str) -> dict:
-    """응시 집단 전체의 필드별 평균 성취율. {유형명: rate(%)}.
+def category_stats(answers: dict, key: AnswerKey, field_name: str) -> list[dict]:
+    """문항 메타의 특정 필드(area/type/difficulty)별 성취율 집계(성취율 내림차순)."""
+    return _group_stats(answers, key, lambda q: key.qmeta.get(q, {}).get(field_name))
 
-    rate = (집단 정답 배점 합) / (집단 배점 합) × 100.
-    """
+
+def reading_category_stats(answers: dict, key: AnswerKey) -> list[dict]:
+    """독해 대분류별 성취율(교육과정 순)."""
+    return _group_stats(answers, key, lambda q: resolve_reading_category(key, q),
+                        order=CATEGORY_ORDER)
+
+
+def _cohort_group(records: list, key: AnswerKey, keyfunc) -> dict:
     groups: dict = {}
     for rec in records:
         ans = rec.get("answers", {})
         for q in key.answers:
-            name = key.qmeta.get(q, {}).get(field_name)
+            name = keyfunc(q)
             if not name:
                 continue
             g = groups.setdefault(name, {"earned": 0.0, "possible": 0.0})
@@ -104,23 +143,29 @@ def cohort_category_stats(records: list, key: AnswerKey, field_name: str) -> dic
             for k, v in groups.items()}
 
 
+def cohort_category_stats(records: list, key: AnswerKey, field_name: str) -> dict:
+    """응시 집단의 필드별 평균 성취율. {유형명: rate(%)}."""
+    return _cohort_group(records, key, lambda q: key.qmeta.get(q, {}).get(field_name))
+
+
 def cohort_analysis(records: list, key: AnswerKey) -> dict:
-    """집단 평균(영역·유형·난이도별)을 한 번에 계산."""
+    """집단 평균(영역·대분류·난이도별)을 한 번에 계산."""
     return {
-        "area": cohort_category_stats(records, key, "area"),
-        "type": cohort_category_stats(records, key, "type"),
-        "difficulty": cohort_category_stats(records, key, "difficulty"),
+        "area": _cohort_group(records, key, lambda q: key.qmeta.get(q, {}).get("area")),
+        "category": _cohort_group(records, key, lambda q: resolve_reading_category(key, q)),
+        "difficulty": _cohort_group(records, key, lambda q: key.qmeta.get(q, {}).get("difficulty")),
     }
 
 
 def english_analysis(answers: dict, key: AnswerKey) -> dict:
-    """영어 모의고사 심화 분석: 등급 + 영역별/유형별/난이도별 성취율."""
+    """영어 모의고사 심화 분석: 등급 + 영역별/독해 대분류별/난이도별 성취율."""
     detail = score_one(answers, key)
     return {
         "grade": compute_grade(detail["raw_score"], key.grade_cuts),
         "grade_cuts": key.grade_cuts,
         "area_stats": category_stats(answers, key, "area"),
-        "type_stats": category_stats(answers, key, "type"),
+        "category_stats": reading_category_stats(answers, key),  # 독해 대분류
+        "type_stats": category_stats(answers, key, "type"),      # 세부 유형(툴팁/상세용)
         "difficulty_stats": category_stats(answers, key, "difficulty"),
     }
 

@@ -205,6 +205,32 @@ def test_english_analysis_and_grade():
     assert diffs["상"] == 0.0
 
 
+def test_reading_category_grouping():
+    from omr.scorer import AnswerKey as _AK, reading_category_stats
+
+    # 세부 유형이 대분류로 묶이고, 듣기는 제외되는지 확인
+    key = _AK(
+        exam_id="E", title="영어", subject="english",
+        answers={1: 1, 2: 1, 3: 1, 4: 1, 5: 1},
+        points={q: 2.0 for q in range(1, 6)},
+        qmeta={
+            1: {"area": "듣기", "type": "목적"},          # 듣기 → 제외
+            2: {"area": "독해", "type": "요지"},          # 대의 파악
+            3: {"area": "독해", "type": "주제"},          # 대의 파악
+            4: {"area": "독해", "type": "빈칸 추론"},      # 빈칸 추론
+            5: {"area": "독해", "type": "글의 순서"},      # 간접 쓰기
+        },
+    )
+    stats = reading_category_stats({1: 1, 2: 1, 3: 2, 4: 1, 5: 2}, key)
+    names = {s["name"]: s for s in stats}
+    assert "듣기" not in " ".join(names)          # 듣기 대분류 없음(영역 카드에서 표시)
+    assert "대의 파악" in names and names["대의 파악"]["count"] == 2
+    assert "빈칸 추론" in names and "간접 쓰기" in names
+    # 대분류 표시는 교육과정 순서(대의 파악이 빈칸/간접보다 앞)
+    order = [s["name"] for s in stats]
+    assert order.index("대의 파악") < order.index("빈칸 추론") < order.index("간접 쓰기")
+
+
 def test_english_report_build():
     import json as _json
     from omr.report_web import build_reports, ExamMeta

@@ -383,14 +383,14 @@ def render_english_report_body(meta: ExamMeta, student: dict, result: dict,
                     f'<span>배점 기준</span></div><div class="area-cards">{area_cards}</div>'
                     f'{area_legend}</section>') if area_cards else ""
 
-    # 유형별 분석 + 약점 안내 (집단 평균 대비)
-    type_stats = analysis.get("type_stats", [])
-    type_panel = _category_panel("유형별 성취율", "내 성취율 vs 집단 평균 · 낮은 순 확인",
-                                 type_stats, cohort.get("type"))
+    # 독해 대분류별 분석 + 약점 안내 (집단 평균 대비)
+    cat_stats = analysis.get("category_stats", [])
+    type_panel = _category_panel("독해 유형별 성취율", "대분류 · 내 성취율 vs 집단 평균",
+                                 cat_stats, cohort.get("category"))
     weak_note = ""
-    weak = [t for t in type_stats if t["rate"] < 60][-3:]
+    weak = sorted([c for c in cat_stats if c["rate"] < 60], key=lambda x: x["rate"])[:3]
     if weak:
-        names = ", ".join(html.escape(t["name"]) for t in reversed(weak))
+        names = ", ".join(html.escape(c["name"]) for c in weak)
         weak_note = (f'<div class="weak-note"><strong>우선 보완 유형</strong> — '
                      f'{names} 영역의 성취율이 낮습니다. 해당 유형 문항 풀이를 집중 권장합니다.</div>')
 
