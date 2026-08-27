@@ -294,22 +294,34 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         sheet_title = sheet_title + " 답안지"
     has_sub = bool(period or subject)
     tb_x0, tb_y0 = mm(ml + 16), mm(mt + 1)
-    tb_x1, tb_y1 = mm(ml + 74), mm(mt + (25 if has_sub else 16))
+    tb_x1, tb_y1 = mm(ml + 74), mm(mt + (25 if has_sub else 15))
     d.rounded_rectangle([tb_x0, tb_y0, tb_x1, tb_y1], radius=mm(2), fill=_NAVY)
-    title_y = tb_y0 + mm(6) if has_sub else (tb_y0 + tb_y1) // 2
-    _centered_text(d, (tb_x0 + tb_x1) // 2, title_y,
-                   sheet_title, fit_font(sheet_title, tb_x1 - tb_x0 - mm(6), 12, 7), fill="white")
-    if period:
-        # 교시 원 + 영역
-        circ_cx, circ_cy, cr = tb_x0 + mm(9), tb_y1 - mm(8), mm(5.5)
-        d.ellipse([circ_cx - cr, circ_cy - cr, circ_cx + cr, circ_cy + cr], outline="white", width=mm(0.6))
-        _centered_text(d, circ_cx, circ_cy, str(period), font(13, True), fill="white")
-        if subject:
-            d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), f"교시   {subject}", font=font(12, True), fill="white")
+    tb_cx = (tb_x0 + tb_x1) // 2
+    band_h = tb_y1 - tb_y0
+
+    def _left_mid(x, cy, text, ft, fill="white"):
+        bb = d.textbbox((0, 0), text, font=ft)
+        d.text((x, cy - (bb[3] - bb[1]) / 2 - bb[1]), text, font=ft, fill=fill)
+
+    if has_sub:
+        # 제목은 상단 영역 중앙, 교시/영역 줄은 하단 영역 중앙 — 두 줄을 각각 수직 정렬
+        title_cy = tb_y0 + int(band_h * 0.34)
+        row_cy = tb_y0 + int(band_h * 0.72)
+        _centered_text(d, tb_cx, title_cy, sheet_title,
+                       fit_font(sheet_title, tb_x1 - tb_x0 - mm(8), 12, 7), fill="white")
+        if period:
+            cr = mm(5.0)
+            circ_cx = tb_x0 + mm(10)
+            d.ellipse([circ_cx - cr, row_cy - cr, circ_cx + cr, row_cy + cr],
+                      outline="white", width=mm(0.6))
+            _centered_text(d, circ_cx, row_cy, str(period), font(12, True), fill="white")
+            label = f"교시   {subject}" if subject else "교시"
+            _left_mid(circ_cx + cr + mm(4), row_cy, label, font(11, True))
         else:
-            d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), "교시", font=font(12, True), fill="white")
-    elif subject:
-        _centered_text(d, (tb_x0 + tb_x1) // 2, tb_y1 - mm(6), subject, font(12, True), fill="white")
+            _centered_text(d, tb_cx, row_cy, subject, font(11, True), fill="white")
+    else:
+        _centered_text(d, tb_cx, (tb_y0 + tb_y1) // 2, sheet_title,
+                       fit_font(sheet_title, tb_x1 - tb_x0 - mm(8), 12, 7), fill="white")
 
     # --- 상단 안내문 (우측, 질문 헤더 위) ---
     ins_x = mm(ml + 80)
@@ -386,11 +398,17 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         first_b = sorted(qmap[qnos[0]], key=lambda b: b.value)[0]
         col_left = first_b.x_mm - 13
         col_right = first_b.x_mm + (cfg.num_choices - 1) * cpitch + 4
-        # 헤더 바
+        num_cx = col_left + 5.5                                   # 문항번호 중심 x
+        ans_cx = first_b.x_mm + (cfg.num_choices - 1) * cpitch / 2  # 보기 버블 스팬 중심 x
+        # 헤더 바 — '문번'은 번호칸 위, '답란'은 보기칸 위에 정렬
+        hy = header_y + mm(3)
         d.rounded_rectangle([mm(col_left), header_y, mm(col_right), header_y + mm(6)],
                             radius=mm(1), fill=_NAVY)
-        _centered_text(d, mm((col_left + col_right) / 2), header_y + mm(3),
-                       "문번        답    란", font(8.5, True), fill="white")
+        _centered_text(d, mm(num_cx), hy, "문번", font(8.0, True), fill="white")
+        _centered_text(d, mm(ans_cx), hy, "답    란", font(8.0, True), fill="white")
+        # 번호칸과 답란 사이 세로 구분선
+        d.line([mm(col_left + 11), header_y + mm(1), mm(col_left + 11), header_y + mm(5)],
+               fill=(120, 150, 190), width=mm(0.3))
         # 그룹 음영 + 행
         for gi, qno in enumerate(qnos):
             bl = sorted(qmap[qno], key=lambda b: b.value)
@@ -410,6 +428,32 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         d.rectangle([mm(col_left), header_y, mm(col_right),
                      mm(sorted(qmap[qnos[-1]], key=lambda b: b.value)[0].y_mm + rpitch / 2)],
                     outline=_BORDER, width=mm(0.4))
+
+    # --- 서술형(주관식) 손기입 칸 (오른쪽 세로 배치) ---
+    # 판독 대상 아님: 이 영역에는 버블 좌표가 없어 스캔 판독에 영향을 주지 않는다.
+    essay_boxes = getattr(layout, "essay_boxes_mm", None) or []
+    if essay_boxes:
+        ex0 = essay_boxes[0]["x0"]
+        ex1 = essay_boxes[0]["x1"]
+        # 영역 헤더 바
+        d.rounded_rectangle([mm(ex0), header_y, mm(ex1), header_y + mm(6)],
+                            radius=mm(1), fill=_NAVY)
+        _centered_text(d, mm((ex0 + ex1) / 2), header_y + mm(3),
+                       "서술형 답란 (손으로 작성)", font(8.0, True), fill="white")
+        for eb in essay_boxes:
+            bx0, by0, bx1, by1 = eb["x0"], eb["y0"], eb["x1"], eb["y1"]
+            d.rectangle([mm(bx0), mm(by0), mm(bx1), mm(by1)], outline=_BORDER, width=mm(0.4))
+            # 번호 태그(좌상단)
+            tag = f'{eb["num"]}'
+            d.rounded_rectangle([mm(bx0), mm(by0), mm(bx0 + 11), mm(by0 + 6)],
+                                radius=mm(1), fill=_BAND)
+            _centered_text(d, mm(bx0 + 5.5), mm(by0 + 3), tag, font(8.5, True), fill=_NAVY)
+            d.text((mm(bx0 + 13), mm(by0 + 1.4)), eb.get("label", ""), font=font(7.2), fill=_INK)
+            # 옅은 밑줄 가이드(작성 편의)
+            gy = by0 + 11
+            while gy < by1 - 3:
+                d.line([mm(bx0 + 3), mm(gy), mm(bx1 - 3), mm(gy)], fill=(214, 219, 226), width=mm(0.25))
+                gy += 7
 
     # --- 학원 로고 (우하단 구석) ---
     academy = cfg.academy or "○○학원"

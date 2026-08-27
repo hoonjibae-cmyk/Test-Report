@@ -36,6 +36,7 @@ class SheetConfig:
     subject_label: str = ""       # 영역 표기 (예: "영어 영역")
     academy: str = ""             # 학원명 (구석 로고 옆)
     academy_logo: str = ""        # 학원 로고 이미지 경로(있으면 우하단에 배치)
+    essay_count: int = 0          # 서술형(주관식) 문항 수 — 객관식 뒤 번호로 손기입 칸 제공
 
 
 @dataclass
@@ -78,6 +79,8 @@ class Layout:
     q_choice_pitch_mm: float = 7.0   # 보기 버블 간격
     q_row_pitch_mm: float = 8.0      # 문항 행 간격
     style: str = "basic"
+    # 서술형(주관식) 손기입 칸: 판독 대상이 아님(버블 없음). 렌더러 전용 좌표.
+    essay_boxes_mm: list = field(default_factory=list)  # [{"num", "x0","y0","x1","y1"}]
 
     def template_dict(self, dpi: int) -> dict:
         """판독기가 사용할 템플릿(JSON 직렬화용)."""
@@ -262,15 +265,38 @@ def build_exam_layout(config: SheetConfig) -> Layout:
             u, v = norm(cx, cy)
             bubbles.append(Bubble("id", col, digit, cx, cy, u, v))
 
-    # --- 우측: 3단 문항 (수능식 20/20/5 등) ---
+    # --- 우측: 다단 객관식 문항 + (선택) 서술형 손기입 칸 ---
     n = config.num_questions
     per_col = config.questions_per_column or 20
     num_cols = (n + per_col - 1) // per_col
     q_area_left = m_left + 78     # 좌측 패널 오른쪽부터
     q_area_right = m_right - 4
-    col_pitch = (q_area_right - q_area_left) / num_cols
+    q_area_w = q_area_right - q_area_left
     choice_pitch = 6.6
     label_gap = 13.0
+
+    # 한 객관식 열이 실제로 차지하는 폭(번호칸~마지막 보기+오른쪽 여백)
+    col_content_w = label_gap + (config.num_choices - 1) * choice_pitch + 4.0
+    max_gutter = 16.0            # 열 사이 최대 여백(과도한 빈칸 방지)
+    min_gutter = 6.0
+
+    # 서술형 영역은 오른쪽에 세로로 배치(폭 고정, 남는 공간을 활용).
+    essay_count = max(0, int(config.essay_count or 0))
+    essay_w = 84.0 if essay_count else 0.0
+    essay_gap = 8.0 if essay_count else 0.0
+    obj_avail = q_area_w - (essay_gap + essay_w)
+
+    # 객관식 열 간격: 남는 폭에 맞춰 벌리되, 과도한 빈칸이 생기지 않게 상한을 둔다.
+    # (문항이 많아 3단 이상이면 자동으로 좁아지고, 2단이면 상한에서 멈춰 간격이 일정.)
+    if num_cols > 0:
+        col_pitch = min(obj_avail / num_cols, col_content_w + max_gutter)
+        col_pitch = max(col_pitch, col_content_w + min_gutter)
+        # 열이 서술형 영역을 침범하면 폭에 맞춰 균등 분배로 되돌린다.
+        if q_area_left + num_cols * col_pitch > q_area_left + obj_avail + 0.1:
+            col_pitch = max(col_content_w + 1.0, obj_avail / num_cols)
+    else:
+        col_pitch = col_content_w + min_gutter
+
     q_top = m_top + 37           # 헤더행(문번/답란)과 1·21·41번 간섭 방지
     q_bottom_limit = m_bottom - 9  # 최하단 행이 가장자리 왜곡 영역에 닿지 않도록 여유
     rows = min(per_col, n)
@@ -290,6 +316,24 @@ def build_exam_layout(config: SheetConfig) -> Layout:
             u, v = norm(cx, row_y)
             bubbles.append(Bubble("question", q, ci, cx, row_y, u, v))
 
+    # --- 서술형(주관식) 손기입 칸: 오른쪽 세로 배치, 판독 대상 아님 ---
+    essay_boxes = []
+    if essay_count:
+        ex0 = q_area_right - essay_w
+        ex1 = q_area_right
+        etop = q_top - 6            # 객관식 헤더와 상단 정렬
+        ebottom = q_bottom_limit - 14   # 우하단 로고 자리 확보
+        slot_h = (ebottom - etop) / essay_count
+        box_gap = 3.0
+        for k in range(essay_count):
+            by0 = etop + k * slot_h
+            by1 = by0 + slot_h - box_gap
+            essay_boxes.append({
+                "num": n + k + 1,
+                "label": f"서술 {k + 1}",
+                "x0": ex0, "y0": by0, "x1": ex1, "y1": by1,
+            })
+
     return Layout(
         config=config,
         page_w_mm=page_w, page_h_mm=page_h,
@@ -302,4 +346,5 @@ def build_exam_layout(config: SheetConfig) -> Layout:
         id_col_pitch_mm=id_col_pitch, id_row_pitch_mm=id_row_pitch,
         q_choice_pitch_mm=choice_pitch, q_row_pitch_mm=row_pitch,
         style="exam",
+        essay_boxes_mm=essay_boxes,
     )

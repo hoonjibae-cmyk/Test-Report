@@ -94,6 +94,75 @@ def test_exam_style_roundtrip_and_left_aligned_id():
         assert len(r.review_flags) == 0
 
 
+def test_exam_essay_and_correction_tape():
+    """서술형(주관식) 손기입 칸과 수정테이프가 객관식 판독을 방해하지 않는다."""
+    import numpy as np
+    from omr.generator import render_exam_image
+
+    d = _tmp()
+    cfg = SheetConfig(exam_id="ESY", title="4월 월말평가", num_questions=20,
+                      num_choices=5, id_digits=5, questions_per_column=20,
+                      style="exam", essay_count=3, academy="테스트학원")
+    res = generate(cfg, d, dpi=210, make_preview=False)
+    tpl = res["template"]
+    layout = build_layout(cfg)
+
+    # 서술형 칸은 판독 대상 버블이 아니어야 한다(객관식 20문항 버블만 존재).
+    assert len(layout.essay_boxes_mm) == 3
+    qidx = {b.index for b in layout.bubbles if b.role == "question"}
+    assert qidx == set(range(1, 21))
+
+    dpi = 210
+
+    def mm2px(v):
+        return int(round(v / 25.4 * dpi))
+
+    img = cv2.cvtColor(np.array(render_exam_image(layout, dpi=dpi)), cv2.COLOR_RGB2BGR)
+    bub = {(b.role, b.index, b.value): b for b in layout.bubbles}
+    r = int(mm2px(layout.bubble_radius_mm) * 0.8)
+
+    def fill(b):
+        cv2.circle(img, (mm2px(b.x_mm), mm2px(b.y_mm)), r, (35, 35, 35), -1)
+
+    ans = {i: ((i * 2) % 5) + 1 for i in range(1, 21)}  # ans[3] == 2
+    # 3번: 보기4로 잘못 표기 후 수정테이프(밝은 회색)로 덮고 정답 표기
+    wrong = bub[("question", 3, 3)]
+    fill(wrong)
+    cx, cy = mm2px(wrong.x_mm), mm2px(wrong.y_mm)
+    cv2.rectangle(img, (cx - int(r * 1.7), cy - int(r * 1.4)),
+                  (cx + int(r * 1.7), cy + int(r * 1.4)), (236, 236, 236), -1)
+    for q, c in ans.items():
+        fill(bub[("question", q, c - 1)])
+    sid = "20421"
+    for col, ch in enumerate(sid):
+        fill(bub[("id", col, int(ch))])
+    # 서술형 칸 전체에 손글씨 낙서
+    for eb in layout.essay_boxes_mm:
+        x0, y0, x1, y1 = (mm2px(eb["x0"]), mm2px(eb["y0"]), mm2px(eb["x1"]), mm2px(eb["y1"]))
+        for i in range(6):
+            yy = y0 + int((y1 - y0) * (0.25 + 0.1 * i))
+            pts = np.array([[x0 + 20 + j * 25, yy + int(12 * np.sin(j * 0.9 + i))]
+                            for j in range(20)], np.int32)
+            cv2.polylines(img, [pts], False, (30, 30, 30), 3)
+
+    rng = np.random.default_rng(3)
+    h, w = img.shape[:2]
+    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    dst = (src + rng.uniform(-0.01, 0.01, src.shape) * [w, h]).astype(np.float32)
+    img = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (w, h),
+                              borderValue=(255, 255, 255))
+    img = np.clip(img.astype(np.float32) + rng.normal(0, 5, img.shape), 0, 255).astype(np.uint8)
+
+    p = os.path.join(d, "essay_scan.png")
+    cv2.imwrite(p, img)
+    rr = read_omr(p, tpl, params=ReadParams())
+    got = rr.answers()
+    assert all(got.get(q) == ans[q] for q in ans), got   # 수정테이프 정정 포함 전 문항 정확
+    assert got.get(3) == ans[3]                            # 테이프로 가린 오답은 무시
+    assert rr.student_id_bubbles == sid
+    assert len(rr.review_flags) == 0                       # 서술형 낙서로 인한 오검출 없음
+
+
 def test_ambiguous_flagged_not_scored():
     d = _tmp()
     cfg = SheetConfig(exam_id="T3", num_questions=10, num_choices=5, id_digits=4)

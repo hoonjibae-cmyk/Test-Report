@@ -53,6 +53,7 @@ class SheetSpec(BaseModel):
     period: str = ""
     subject_label: str = ""
     academy: str = "목동유쌤영어학원"
+    essay_count: int = 0           # 서술형(주관식) 문항 수 — 손기입 칸
     dpi: int = 200
     include_preview: bool = False   # true면 미리보기 PNG(base64)도 반환
 
@@ -71,6 +72,7 @@ def generate_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None)
         num_choices=spec.num_choices, id_digits=spec.id_digits,
         questions_per_column=spec.per_column, style=spec.style,
         period=spec.period, subject_label=spec.subject_label, academy=spec.academy,
+        essay_count=spec.essay_count,
         academy_logo=LOGO if os.path.exists(LOGO) else "",
     )
     with tempfile.TemporaryDirectory() as d:
@@ -114,6 +116,7 @@ async def read_scans(
             num_choices=s.num_choices, id_digits=s.id_digits,
             questions_per_column=s.per_column, style=s.style,
             period=s.period, subject_label=s.subject_label, academy=s.academy,
+            essay_count=s.essay_count,
         )
         template = json.dumps(build_layout(cfg).template_dict(s.dpi), ensure_ascii=False)
 
