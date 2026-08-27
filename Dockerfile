@@ -2,10 +2,10 @@
 FROM python:3.11-slim
 
 # 한글 폰트(나눔) + OpenCV 런타임 라이브러리
+# (fc-cache는 slim 이미지에 없고, 폰트는 파일 경로로 직접 로드하므로 불필요)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-nanum libglib2.0-0 libgomp1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && fc-cache -f
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt .
