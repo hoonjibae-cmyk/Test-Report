@@ -293,8 +293,15 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     if "답안지" not in sheet_title:
         sheet_title = sheet_title + " 답안지"
     has_sub = bool(period or subject)
-    tb_x0, tb_y0 = mm(ml + 16), mm(mt + 1)
-    tb_x1, tb_y1 = mm(ml + 74), mm(mt + (25 if has_sub else 15))
+    # 좌측 패널 공통 좌·우변 (layout.py의 panel_right와 동일식) — 제목 밴드부터
+    # 성명/수험번호/감독관 박스까지 전부 이 두 변에 정렬한다.
+    idl, idt = layout.id_origin_mm
+    cp, rp = layout.id_col_pitch_mm, layout.id_row_pitch_mm
+    px0 = mm(ml + 2)
+    px1 = max(mm(ml + 54), mm(idl + (cfg.id_digits - 1) * cp + 6))
+    # 밴드 상단은 TL 마커(y≈mt+5.5까지) 아래로 내려 마커를 가리지 않게 한다.
+    tb_x0, tb_y0 = px0, mm(mt + 8)
+    tb_x1, tb_y1 = px1, mm(mt + (28 if has_sub else 21))
     d.rounded_rectangle([tb_x0, tb_y0, tb_x1, tb_y1], radius=mm(2), fill=_NAVY)
     tb_cx = (tb_x0 + tb_x1) // 2
     band_h = tb_y1 - tb_y0
@@ -316,16 +323,18 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                       outline="white", width=mm(0.6))
             _centered_text(d, circ_cx, row_cy, str(period), font(12, True), fill="white")
             label = f"교시   {subject}" if subject else "교시"
-            _left_mid(circ_cx + cr + mm(4), row_cy, label, font(11, True))
+            _left_mid(circ_cx + cr + mm(4), row_cy, label,
+                      fit_font(label, tb_x1 - (circ_cx + cr + mm(4)) - mm(2), 11, 7))
         else:
-            _centered_text(d, tb_cx, row_cy, subject, font(11, True), fill="white")
+            _centered_text(d, tb_cx, row_cy, subject,
+                           fit_font(subject, tb_x1 - tb_x0 - mm(8), 11, 7), fill="white")
     else:
         _centered_text(d, tb_cx, (tb_y0 + tb_y1) // 2, sheet_title,
                        fit_font(sheet_title, tb_x1 - tb_x0 - mm(8), 12, 7), fill="white")
 
-    # --- 상단 안내문 (우측, 질문 헤더 위) ---
-    ins_x = mm(ml + 80)
-    ins_y = mm(mt + 2)
+    # --- 상단 안내문 (제목 밴드 오른쪽, 밴드 상단에 맞춰 정렬) ---
+    ins_x = tb_x1 + mm(8)
+    ins_y = mm(mt + 8)
     d.text((ins_x, ins_y), "※ 검은색 컴퓨터용 사인펜만 사용하여 표기하십시오.",
            font=font(8.0), fill=_INK)
     d.text((ins_x, ins_y + mm(5.0)), "※ 수험번호는 왼쪽부터 채워 표기(4~5자리).",
@@ -334,12 +343,7 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
            font=font(8.0), fill=_INK)
 
     # --- 좌측 인적사항 박스 (성명 / 학교·학년 / 수강반) ---
-    # 우측 정렬 기준: 수험번호 입력칸 폭에 맞춰 성명·학교·학년·수강반·감독관 박스 우변을 통일
-    idl, idt = layout.id_origin_mm
-    cp, rp = layout.id_col_pitch_mm, layout.id_row_pitch_mm
-    px0 = mm(ml + 2)
-    px1 = max(mm(ml + 54), mm(idl + (cfg.id_digits - 1) * cp + 6))
-
+    # px0/px1은 제목 밴드에서 이미 계산 — 전 좌측 요소가 같은 두 변에 정렬된다.
     def field_box(y0, y1, label, value=""):
         d.rectangle([px0, mm(y0), px1, mm(y1)], outline=_BORDER, width=mm(0.4))
         d.text((px0 + mm(3), mm(y0) + mm(2.2)), label, font=font(9, True), fill=_INK)

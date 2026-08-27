@@ -265,11 +265,16 @@ def build_exam_layout(config: SheetConfig) -> Layout:
             u, v = norm(cx, cy)
             bubbles.append(Bubble("id", col, digit, cx, cy, u, v))
 
+    # 좌측 패널(성명~감독관 박스)의 공통 우변 — 수험번호 그리드 폭 기준.
+    # 렌더러도 같은 식으로 계산해 제목 밴드·박스들을 이 우변에 정렬한다.
+    panel_right = max(m_left + 54.0,
+                      id_left + (config.id_digits - 1) * id_col_pitch + 6.0)
+
     # --- 우측: 다단 객관식 문항 + (선택) 서술형 손기입 칸 ---
     n = config.num_questions
     per_col = config.questions_per_column or 20
     num_cols = (n + per_col - 1) // per_col
-    q_area_left = m_left + 78     # 좌측 패널 오른쪽부터
+    q_area_left = max(m_left + 78, panel_right + 14)  # 좌측 패널 우변과 연동(겹침 방지)
     q_area_right = m_right - 4
     q_area_w = q_area_right - q_area_left
     choice_pitch = 6.6
@@ -296,6 +301,12 @@ def build_exam_layout(config: SheetConfig) -> Layout:
             col_pitch = max(col_content_w + 1.0, obj_avail / num_cols)
     else:
         col_pitch = col_content_w + min_gutter
+
+    # 서술형이 없으면 열 그룹을 가용 폭 중앙에 배치해 좌우 여백을 균형 있게 나눈다.
+    # (서술형이 있으면 좌측 고정 — 오른쪽은 서술형 칸이 채운다.)
+    if not essay_count:
+        group_w = (num_cols - 1) * col_pitch + col_content_w
+        q_area_left += max(0.0, (obj_avail - group_w) / 2)
 
     q_top = m_top + 37           # 헤더행(문번/답란)과 1·21·41번 간섭 방지
     q_bottom_limit = m_bottom - 9  # 최하단 행이 가장자리 왜곡 영역에 닿지 않도록 여유
