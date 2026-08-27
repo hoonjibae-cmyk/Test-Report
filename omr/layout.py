@@ -322,7 +322,7 @@ def build_exam_layout(config: SheetConfig) -> Layout:
         ex0 = q_area_right - essay_w
         ex1 = q_area_right
         etop = q_top - 6            # 객관식 헤더와 상단 정렬
-        ebottom = q_bottom_limit - 14   # 우하단 로고 자리 확보
+        ebottom = q_bottom_limit + 4    # 로고가 상단으로 이동해 하단 전체 사용
         slot_h = (ebottom - etop) / essay_count
         box_gap = 3.0
         for k in range(essay_count):

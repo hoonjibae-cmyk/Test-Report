@@ -334,12 +334,16 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
            font=font(8.0), fill=_INK)
 
     # --- 좌측 인적사항 박스 (성명 / 학교·학년 / 수강반) ---
-    px0, px1 = mm(ml + 2), mm(ml + 74)
+    # 우측 정렬 기준: 수험번호 입력칸 폭에 맞춰 성명·학교·학년·수강반·감독관 박스 우변을 통일
+    idl, idt = layout.id_origin_mm
+    cp, rp = layout.id_col_pitch_mm, layout.id_row_pitch_mm
+    px0 = mm(ml + 2)
+    px1 = max(mm(ml + 54), mm(idl + (cfg.id_digits - 1) * cp + 6))
 
     def field_box(y0, y1, label, value=""):
         d.rectangle([px0, mm(y0), px1, mm(y1)], outline=_BORDER, width=mm(0.4))
         d.text((px0 + mm(3), mm(y0) + mm(2.2)), label, font=font(9, True), fill=_INK)
-        lx = px0 + mm(26)
+        lx = px0 + mm(24)
         d.line([lx, mm(y1) - mm(3.5), px1 - mm(4), mm(y1) - mm(3.5)], fill=_BORDER, width=mm(0.3))
         if value:
             d.text((lx + mm(2), mm(y0) + mm(2.2)), value, font=font(9.5, True), fill=_INK)
@@ -349,10 +353,8 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     field_box(mt + 56, mt + 68, "수 강 반", student.get("class", "") if student else "")
 
     # --- 수험번호 그리드 ---
-    idl, idt = layout.id_origin_mm
-    cp, rp = layout.id_col_pitch_mm, layout.id_row_pitch_mm
     box_x0 = px0
-    box_x1 = mm(idl + (cfg.id_digits - 1) * cp + 6)
+    box_x1 = px1
     box_y0 = mm(mt + 71)
     box_y1 = mm(idt + 9 * rp + 5)
     d.rectangle([box_x0, box_y0, box_x1, box_y1], outline=_NAVY, width=mm(0.5))
@@ -455,29 +457,34 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                 d.line([mm(bx0 + 3), mm(gy), mm(bx1 - 3), mm(gy)], fill=(214, 219, 226), width=mm(0.25))
                 gy += 7
 
-    # --- 학원 로고 (우하단 구석) ---
+    # --- 학원 로고 (QR 코드 왼쪽, 답란이 올 수 없는 상단 여백 활용) ---
     academy = cfg.academy or "○○학원"
     logo_path = cfg.academy_logo
+    qx, qy = layout.qr_xy_mm
+    qs = layout.qr_size_mm
     placed = False
     if logo_path and os.path.exists(logo_path):
         try:
             logo = Image.open(logo_path).convert("RGBA")
-            target_h = mm(22)
+            target_h = mm(13)
             target_w = int(logo.width * target_h / logo.height)
             logo = logo.resize((target_w, target_h), Image.LANCZOS)
             bg = Image.new("RGBA", logo.size, (255, 255, 255, 0))
             bg.alpha_composite(logo)
-            x1, y1 = mm(mr - 9), mm(mb - 8)
-            img.paste(bg.convert("RGB"), (x1 - target_w, y1 - target_h), bg)
+            right_x = mm(qx) - mm(5)                      # QR 왼쪽에 여백 두고 배치
+            top_y = mm(qy) + (mm(qs) - target_h) // 2     # QR과 세로 중앙 정렬
+            img.paste(bg.convert("RGB"), (right_x - target_w, top_y), bg)
             placed = True
         except Exception:
             placed = False
     if not placed:
-        lg = mm(9)
+        lg = mm(11)
         ac_w = mm(2 + 4.2 * len(academy))
-        lx, ly = mm(mr) - mm(6) - ac_w - lg, mm(mb - 16)
-        _brand_mark(d, lx, ly, lg, academy[0], font(5.5, True))
-        d.text((lx + lg + mm(2), ly + lg / 2 - mm(2.4)), academy, font=font(10, True), fill=_NAVY)
+        top_y = mm(qy) + (mm(qs) - lg) // 2
+        rx = mm(qx) - mm(5)
+        lx = rx - ac_w - lg - mm(2)
+        _brand_mark(d, lx, top_y, lg, academy[0], font(6.5, True))
+        d.text((lx + lg + mm(2), top_y + lg / 2 - mm(2.4)), academy, font=font(10, True), fill=_NAVY)
 
     return img
 
