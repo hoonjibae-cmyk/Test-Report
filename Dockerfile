@@ -13,9 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# 시험 데이터는 영구 디스크(/data)에 저장 (호스팅에서 볼륨 마운트)
 ENV OMR_DATA_DIR=/data/exams
 EXPOSE 8000
 
-# 호스팅이 주는 PORT 사용(없으면 8000)
-CMD ["sh", "-c", "python -m uvicorn webapp.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# 기본은 stateless OMR API(mock-report-web 연동용).
+# 단독 관리 웹앱을 쓰려면 APP_MODULE=webapp.app:app 로 실행.
+ENV APP_MODULE=omr_api.main:app
+CMD ["sh", "-c", "python -m uvicorn ${APP_MODULE} --host 0.0.0.0 --port ${PORT:-8000}"]
