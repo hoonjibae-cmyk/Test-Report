@@ -286,21 +286,30 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
 
     # --- 제목 밴드 (좌상단, 코너 마커 오른쪽) ---
     # 답안지 이름 = 사용자가 설정한 시험제목(자동). '답안지'가 없으면 덧붙임.
-    period = cfg.period or "3"
-    subject = cfg.subject_label or "영어 영역"
+    # 교시/영역은 값이 있을 때만 표기(영어 모의고사가 아닌 범용 시험은 강제 문구 없음).
+    period = (cfg.period or "").strip()
+    subject = (cfg.subject_label or "").strip()
     sheet_title = cfg.title or "모의고사"
     if "답안지" not in sheet_title:
         sheet_title = sheet_title + " 답안지"
+    has_sub = bool(period or subject)
     tb_x0, tb_y0 = mm(ml + 16), mm(mt + 1)
-    tb_x1, tb_y1 = mm(ml + 74), mm(mt + 25)
+    tb_x1, tb_y1 = mm(ml + 74), mm(mt + (25 if has_sub else 16))
     d.rounded_rectangle([tb_x0, tb_y0, tb_x1, tb_y1], radius=mm(2), fill=_NAVY)
-    _centered_text(d, (tb_x0 + tb_x1) // 2, tb_y0 + mm(6),
-                   sheet_title, fit_font(sheet_title, tb_x1 - tb_x0 - mm(6), 11, 7), fill="white")
-    # 교시 원 + 영역
-    circ_cx, circ_cy, cr = tb_x0 + mm(9), tb_y1 - mm(8), mm(5.5)
-    d.ellipse([circ_cx - cr, circ_cy - cr, circ_cx + cr, circ_cy + cr], outline="white", width=mm(0.6))
-    _centered_text(d, circ_cx, circ_cy, str(period), font(13, True), fill="white")
-    d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), f"교시   {subject}", font=font(12, True), fill="white")
+    title_y = tb_y0 + mm(6) if has_sub else (tb_y0 + tb_y1) // 2
+    _centered_text(d, (tb_x0 + tb_x1) // 2, title_y,
+                   sheet_title, fit_font(sheet_title, tb_x1 - tb_x0 - mm(6), 12, 7), fill="white")
+    if period:
+        # 교시 원 + 영역
+        circ_cx, circ_cy, cr = tb_x0 + mm(9), tb_y1 - mm(8), mm(5.5)
+        d.ellipse([circ_cx - cr, circ_cy - cr, circ_cx + cr, circ_cy + cr], outline="white", width=mm(0.6))
+        _centered_text(d, circ_cx, circ_cy, str(period), font(13, True), fill="white")
+        if subject:
+            d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), f"교시   {subject}", font=font(12, True), fill="white")
+        else:
+            d.text((circ_cx + cr + mm(3), circ_cy - mm(4)), "교시", font=font(12, True), fill="white")
+    elif subject:
+        _centered_text(d, (tb_x0 + tb_x1) // 2, tb_y1 - mm(6), subject, font(12, True), fill="white")
 
     # --- 상단 안내문 (우측, 질문 헤더 위) ---
     ins_x = mm(ml + 80)
