@@ -124,7 +124,7 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
     # 문항 번호 라벨
     c.setFont(font_name, 8)
     n = layout.config.num_questions
-    per_col = layout.config.questions_per_column
+    per_col = layout.questions_per_column
     for q in range(1, n + 1):
         # 각 문항 첫 버블의 좌측에 번호
         first = next(b for b in layout.bubbles if b.role == "question" and b.index == q and b.value == 0)
@@ -406,7 +406,8 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     d.text((box_x0 + mm(3), gv_y0 + mm(7.5)), "(서명 또는 날인)", font=font(7.2), fill=_INK)
 
     # --- 문항 (다단, 5행 그룹 음영 + 5의 배수 굵게) ---
-    per_col = cfg.questions_per_column or 20
+    # 설정값이 아니라 배치에서 확정된 값 — 종이에 안 맞으면 조정되었을 수 있다.
+    per_col = layout.questions_per_column
     qbycol: dict = {}
     for b in layout.bubbles:
         if b.role != "question":

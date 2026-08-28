@@ -20,6 +20,12 @@ A4_H_MM = 297.0
 MARKER_DICT = "DICT_4X4_50"
 MARKER_IDS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 
+# 수능형 배치 한계값 (mm)
+MIN_ROW_PITCH_MM = 6.5      # 문항 행 간격 하한 — 이보다 좁으면 버블이 붙는다
+MIN_CHOICE_PITCH_MM = 5.8   # 보기 버블 간격 하한(지름 5mm + 여백 0.8mm)
+ESSAY_PREF_MIN_MM = 46.0    # 서술형 칸 선호 최소 폭
+ESSAY_HARD_MIN_MM = 34.0    # 이보다 좁아지면 객관식 열 수를 줄인다
+
 
 @dataclass
 class SheetConfig:
@@ -105,6 +111,9 @@ class Layout:
     id_row_pitch_mm: float = 5.0     # 학번 행 간격
     q_choice_pitch_mm: float = 7.0   # 보기 버블 간격
     q_row_pitch_mm: float = 8.0      # 문항 행 간격
+    # 실제로 적용된 열당 문항 수. 설정값이 종이에 안 맞으면 배치 단계에서 조정되므로,
+    # 렌더러는 config가 아니라 반드시 이 값으로 문항을 열에 나눠야 한다.
+    questions_per_column: int = 20
     style: str = "basic"
     # 서술형(주관식) 손기입 칸: 판독 대상이 아님(버블 없음). 렌더러 전용 좌표.
     essay_boxes_mm: list = field(default_factory=list)  # [{"num", "x0","y0","x1","y1"}]
@@ -243,6 +252,7 @@ def build_layout(config: SheetConfig) -> Layout:
         id_row_pitch_mm=id_row_pitch,
         q_choice_pitch_mm=choice_pitch,
         q_row_pitch_mm=row_pitch,
+        questions_per_column=per_col,
         style="basic",
     )
 
@@ -313,13 +323,81 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     max_gutter = 16.0            # 열 사이 최대 여백(과도한 빈칸 방지)
     min_gutter = 6.0
 
-    # 서술형 영역은 오른쪽에 세로로 배치. 폭은 객관식 열이 먼저 자리를 잡고 남는 만큼
-    # 준다(과거에는 84mm 고정이라 3단 이상일 때 서술형 칸이 객관식 버블 위에 겹쳐 그려졌다).
     essay_count = max(0, int(config.essay_count or 0))
     essay_gap = 8.0 if essay_count else 0.0
+
+    # 문항 행이 세로로 들어갈 수 있는 최대 개수(행 간격 하한 기준)
+    q_top = m_top + 37           # 헤더행(문번/답란)과 1·21·41번 간섭 방지
+    q_bottom_limit = m_bottom - 9  # 최하단 행이 가장자리 왜곡 영역에 닿지 않도록 여유
+    max_rows = int((q_bottom_limit - q_top) / MIN_ROW_PITCH_MM) + 1
+
+    # 한 열에 너무 많이 담으면 행 간격이 좁아져 버블이 세로로 붙는다 — 상한을 둔다.
+    if per_col > max_rows:
+        per_col = max_rows
+        num_cols = (n + per_col - 1) // per_col
+
+    # 가로로 들어갈 수 있는 최대 열 수. 서술형이 있으면 그 최소 폭을 먼저 떼어 둔다.
+    # 실제 배치는 열 사이에 최소 1mm의 여백을 두므로 그만큼 얹어 판정한다.
+    def avail_for_cols() -> float:
+        return q_area_w - essay_gap - (ESSAY_HARD_MIN_MM if essay_count else 0.0)
+
+    def fit_cols() -> int:
+        return max(1, int(avail_for_cols() // (col_content_w + 1.0)))
+
+    def pack_into(cols: int) -> None:
+        """열 수 상한에 맞춰 한 열에 담는 문항 수를 늘린다(버블 간격은 그대로)."""
+        nonlocal per_col, num_cols
+        per_col = min(max_rows, -(-n // cols))
+        num_cols = (n + per_col - 1) // per_col
+
+    # 열이 너무 많아 폭을 넘으면 아래 순서로 양보한다. 판독 정확도에 영향이 적은
+    # 것부터 손대고, 마지막까지 안 되면 그리지 않고 명확한 오류를 낸다.
+    # (예전에는 그대로 그려서, 서술형이 있으면 좌표가 뒤집혀 렌더링이 죽고
+    #  서술형이 없으면 마지막 열이 종이 밖으로 나갔다.)
+    max_cols = fit_cols()
+
+    # ① 한 열에 담는 문항 수를 늘려 열 수를 줄인다
+    if num_cols > max_cols:
+        pack_into(max_cols)
+
+    # ② 좌측 인적사항 패널과의 여백을 줄여 가로 폭을 더 확보한다
+    if num_cols > max_cols:
+        narrowed = max(m_left + 78, panel_right + 8.0)
+        if narrowed < q_area_left:
+            q_area_left = narrowed
+            q_area_w = q_area_right - q_area_left
+            max_cols = fit_cols()
+            if num_cols > max_cols:
+                pack_into(max_cols)
+
+    # ③ 열 내용을 조금 좁힌다(보기 간격 하한까지만)
+    if num_cols > max_cols:
+        # 열 폭은 배율 s에 정비례하므로(col_content_w = s × 기준폭),
+        # num_cols × (s × 기준폭 + 여백 1mm) ≤ 가용폭 을 s에 대해 그대로 푼다.
+        floor_scale = MIN_CHOICE_PITCH_MM / choice_pitch
+        need = (avail_for_cols() / num_cols - 1.0) / col_content_w
+        scale = max(floor_scale, min(1.0, need * 0.999))  # 부동소수 여유
+        if scale < 1.0:
+            label_gap *= scale
+            choice_pitch *= scale
+            col_content_w = label_gap + (config.num_choices - 1) * choice_pitch + 4.0 * scale
+            max_cols = fit_cols()
+            if num_cols > max_cols:
+                pack_into(max_cols)
+
+    if num_cols > max_cols:
+        raise ValueError(
+            f"객관식 {n}문항"
+            + (f"과 서술형 {essay_count}문항" if essay_count else "")
+            + f"을 보기 {config.num_choices}개 기준으로 답안지 한 장에 담을 수 없습니다. "
+            "문항 수를 줄이거나 서술형 칸을 빼고 다시 만들어 주세요."
+        )
+
+    # 서술형 영역은 오른쪽에 세로로 배치. 폭은 객관식 열이 먼저 자리를 잡고 남는 만큼
+    # 준다(과거에는 84mm 고정이라 3단 이상일 때 서술형 칸이 객관식 버블 위에 겹쳐 그려졌다).
     if essay_count:
         min_obj_w = num_cols * (col_content_w + min_gutter) - min_gutter
-        essay_w = max(46.0, min(84.0, q_area_w - essay_gap - min_obj_w))
+        essay_w = max(ESSAY_PREF_MIN_MM, min(84.0, q_area_w - essay_gap - min_obj_w))
     else:
         essay_w = 0.0
     obj_avail = q_area_w - (essay_gap + essay_w)
@@ -341,8 +419,6 @@ def build_exam_layout(config: SheetConfig) -> Layout:
         group_w = (num_cols - 1) * col_pitch + col_content_w
         q_area_left += max(0.0, (obj_avail - group_w) / 2)
 
-    q_top = m_top + 37           # 헤더행(문번/답란)과 1·21·41번 간섭 방지
-    q_bottom_limit = m_bottom - 9  # 최하단 행이 가장자리 왜곡 영역에 닿지 않도록 여유
     rows = min(per_col, n)
     row_pitch = min(9.5, (q_bottom_limit - q_top) / (rows - 1)) if rows > 1 else 9.5
 
@@ -367,6 +443,13 @@ def build_exam_layout(config: SheetConfig) -> Layout:
         obj_right = q_area_left + (num_cols - 1) * col_pitch + col_content_w
         ex0 = max(obj_right + essay_gap, q_area_right - essay_w)
         ex1 = q_area_right
+        # 위의 열 수 조정으로 여기까지 오면 안 되지만, 좌표가 뒤집힌 채 렌더러로
+        # 넘어가면 PIL이 예외로 죽으므로 읽을 수 있는 메시지로 막는다.
+        if ex1 - ex0 < ESSAY_HARD_MIN_MM:
+            raise ValueError(
+                f"객관식 {n}문항과 서술형 {essay_count}문항을 함께 배치할 폭이 부족합니다. "
+                "한 열에 담는 문항 수를 늘리거나, 문항 수를 줄여 주세요."
+            )
         etop = q_top - 6            # 객관식 헤더와 상단 정렬
         ebottom = q_bottom_limit + 4    # 로고가 상단으로 이동해 하단 전체 사용
         slot_h = (ebottom - etop) / essay_count
@@ -391,6 +474,7 @@ def build_exam_layout(config: SheetConfig) -> Layout:
         id_origin_mm=id_origin, q_columns_origin_mm=q_columns_origin,
         id_col_pitch_mm=id_col_pitch, id_row_pitch_mm=id_row_pitch,
         q_choice_pitch_mm=choice_pitch, q_row_pitch_mm=row_pitch,
+        questions_per_column=per_col,
         style="exam",
         essay_boxes_mm=essay_boxes,
     )

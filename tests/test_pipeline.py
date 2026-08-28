@@ -226,6 +226,79 @@ def test_multi_select_many_choices():
     assert rr.questions[2].status == "multiple"
 
 
+def test_exam_layout_never_produces_broken_sheet():
+    """설정이 종이에 안 맞아도 깨진 답안지를 만들지 않는다.
+
+    예전에는 열이 넘칠 때 ① 서술형 칸 좌표가 뒤집혀 렌더링이 예외로 죽거나
+    ② 마지막 열이 종이 밖으로 나갔다. 이제는 배치를 조정하거나, 그래도 안 되면
+    사람이 읽을 수 있는 오류를 낸다 — 어느 쪽이든 '조용히 깨진 답안지'는 없다.
+    """
+    import itertools
+
+    from omr.layout import build_exam_layout
+
+    checked = rejected = 0
+    for n, ch, dig, per, essays in itertools.product(
+        (10, 40, 45, 50, 60, 100), (4, 5), (4, 5, 8), (15, 20, 25), (0, 3, 5)
+    ):
+        cfg = SheetConfig(exam_id="T", num_questions=n, num_choices=ch, id_digits=dig,
+                          questions_per_column=per, style="exam", essay_count=essays)
+        try:
+            layout = build_exam_layout(cfg)
+        except ValueError:
+            rejected += 1      # 한 장에 못 담는 조합 — 명확한 오류로 거절
+            continue
+        combo = (n, ch, dig, per, essays)
+        r = layout.bubble_radius_mm
+        qb = [b for b in layout.bubbles if b.role == "question"]
+        right = max(b.x_mm for b in qb) + r
+
+        assert right <= layout.ref_right_mm + 0.01, f"{combo}: 문항이 종이 밖으로 나감"
+        assert max(b.y_mm for b in qb) + r <= layout.ref_bottom_mm, f"{combo}: 아래로 벗어남"
+        # 수험번호 그리드(좌측 패널)를 침범하지 않아야 한다
+        id_right = layout.id_origin_mm[0] + (dig - 1) * layout.id_col_pitch_mm
+        assert min(b.x_mm for b in qb) - r > id_right, f"{combo}: 수험번호 패널 침범"
+        # 버블이 서로 닿으면 판독이 무너진다
+        assert layout.q_choice_pitch_mm >= 2 * r + 0.7, f"{combo}: 보기 간격 부족"
+        assert layout.q_row_pitch_mm >= 2 * r + 0.7, f"{combo}: 행 간격 부족"
+        if layout.essay_boxes_mm:
+            box = layout.essay_boxes_mm[0]
+            assert box["x0"] > right, f"{combo}: 서술형 칸이 객관식 버블과 겹침"
+            assert box["x1"] > box["x0"], f"{combo}: 서술형 칸 좌표가 뒤집힘"
+        checked += 1
+
+    assert checked > 200, f"검사한 조합이 너무 적습니다({checked})"
+    assert rejected < checked, "대부분의 조합이 거절되면 배치 로직이 과하게 엄격한 것"
+
+
+def test_renderer_uses_effective_per_column():
+    """설정이 조정되면 렌더러도 조정된 값으로 문항을 열에 나눠야 한다.
+
+    Layout.questions_per_column 대신 config 값을 쓰면 문항 번호가 버블과
+    어긋나 답안지가 통째로 못 쓰게 된다.
+    """
+    from omr.layout import build_exam_layout
+
+    cfg = SheetConfig(exam_id="T", num_questions=45, num_choices=5, id_digits=8,
+                      questions_per_column=15, style="exam", essay_count=3)
+    layout = build_exam_layout(cfg)
+    assert layout.questions_per_column != cfg.questions_per_column, "조정이 일어나는 설정이어야 함"
+
+    # 실제 열 개수 = 서로 다른 첫 보기 x좌표의 개수
+    first_xs = {round(b.x_mm, 1) for b in layout.bubbles if b.role == "question" and b.value == 0}
+    expected = -(-cfg.num_questions // layout.questions_per_column)
+    assert len(first_xs) == expected, f"열 개수 불일치: {len(first_xs)} != {expected}"
+
+    # 같은 열의 문항들은 x가 같고 y가 순증해야 한다
+    per_col = layout.questions_per_column
+    for q in range(1, cfg.num_questions):
+        a = next(b for b in layout.bubbles if b.role == "question" and b.index == q and b.value == 0)
+        b_ = next(b for b in layout.bubbles if b.role == "question" and b.index == q + 1 and b.value == 0)
+        if (q - 1) // per_col == q // per_col:
+            assert abs(a.x_mm - b_.x_mm) < 0.01, f"{q}→{q+1}: 같은 열인데 x가 다름"
+            assert b_.y_mm > a.y_mm, f"{q}→{q+1}: 위→아래 순서가 아님"
+
+
 def test_essay_panel_does_not_overlap_bubbles():
     """서술형 손기입 칸이 객관식 버블 위에 겹치면 판독이 깨진다 — 항상 오른쪽에 비켜 있어야."""
     for n, per_col, essays in ((45, 20, 5), (45, 15, 5), (40, 20, 5), (60, 20, 3)):

@@ -69,7 +69,7 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-08-28.2",
+        "version": "2026-08-28.3",
         "pdf": pdf_ok,
     }
 
@@ -87,7 +87,11 @@ def generate_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None)
         academy_logo=LOGO if os.path.exists(LOGO) else "",
     )
     with tempfile.TemporaryDirectory() as d:
-        res = generate(cfg, d, dpi=spec.dpi, make_preview=spec.include_preview)
+        try:
+            res = generate(cfg, d, dpi=spec.dpi, make_preview=spec.include_preview)
+        except ValueError as e:
+            # 설정이 종이에 안 맞는 경우 — 호출 측이 그대로 보여줄 수 있는 안내문이다.
+            raise HTTPException(status_code=422, detail=str(e))
         with open(res["template"], encoding="utf-8") as fp:
             template = json.load(fp)
         with open(res["pdfs"][0], "rb") as fp:
@@ -131,7 +135,10 @@ async def read_scans(
             period=s.period, subject_label=s.subject_label, academy=s.academy,
             essay_count=s.essay_count,
         )
-        template = json.dumps(build_layout(cfg).template_dict(s.dpi), ensure_ascii=False)
+        try:
+            template = json.dumps(build_layout(cfg).template_dict(s.dpi), ensure_ascii=False)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
     params = ReadParams(mark_abs_min=threshold)
     results, problems = [], []
