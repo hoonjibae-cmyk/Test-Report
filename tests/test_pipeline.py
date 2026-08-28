@@ -299,6 +299,42 @@ def test_renderer_uses_effective_per_column():
             assert b_.y_mm > a.y_mm, f"{q}→{q+1}: 위→아래 순서가 아님"
 
 
+def test_read_preview_is_small_and_annotated():
+    """검수 화면용 미리보기는 '판독기가 실제로 본 이미지'이고, 전송하기 가벼워야 한다."""
+    import numpy as np
+
+    d = _tmp()
+    cfg = SheetConfig(exam_id="PV", num_questions=20, num_choices=5, id_digits=4)
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    layout = build_layout(cfg)
+    img = cv2.cvtColor(np.array(render_image(layout, dpi=200)), cv2.COLOR_RGB2BGR)
+    mm2px = lambda v: int(round(v / 25.4 * 200))  # noqa: E731
+    r = int(mm2px(layout.bubble_radius_mm) * 0.8)
+    bub = {(b.role, b.index, b.value): b for b in layout.bubbles}
+    for q in range(1, 21):
+        b = bub[("question", q, q % 5)]
+        cv2.circle(img, (mm2px(b.x_mm), mm2px(b.y_mm)), r, (35, 35, 35), -1)
+    path = os.path.join(d, "scan.png")
+    cv2.imwrite(path, img)
+
+    # 기본은 만들지 않는다(불필요한 비용을 들이지 않음)
+    plain = read_omr(path, res["template"], params=ReadParams())
+    assert plain.preview_jpeg is None
+
+    result = read_omr(path, res["template"], params=ReadParams(), make_preview=True)
+    assert result.preview_jpeg, "미리보기가 만들어져야 한다"
+    size_kb = len(result.preview_jpeg) / 1024
+    assert size_kb < 400, f"미리보기가 너무 큽니다({size_kb:.0f}KB)"
+
+    import numpy as _np
+    decoded = cv2.imdecode(_np.frombuffer(result.preview_jpeg, _np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None, "JPEG로 디코딩되어야 한다"
+    assert decoded.shape[1] <= 1100, "미리보기 폭은 상한 안에 있어야 한다"
+    # 판정 표시는 색으로 그리므로, 회색조가 아니라 컬러여야 한다
+    b, g, rch = cv2.split(decoded)
+    assert not (_np.array_equal(b, g) and _np.array_equal(g, rch)), "판정 표시가 그려져야 한다"
+
+
 def test_essay_panel_does_not_overlap_bubbles():
     """서술형 손기입 칸이 객관식 버블 위에 겹치면 판독이 깨진다 — 항상 오른쪽에 비켜 있어야."""
     for n, per_col, essays in ((45, 20, 5), (45, 15, 5), (40, 20, 5), (60, 20, 3)):

@@ -69,7 +69,7 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-08-28.3",
+        "version": "2026-08-29.1",
         "pdf": pdf_ok,
     }
 
@@ -110,6 +110,7 @@ async def read_scans(
     template: str | None = Form(default=None),       # 판독 템플릿 JSON(문자열)
     spec: str | None = Form(default=None),           # 또는 시트 설정(JSON) → 템플릿 자동 생성
     threshold: float = Form(0.30),
+    include_preview: bool = Form(False),   # 검수 화면용 미리보기(JPEG base64) 동봉
     x_api_key: str | None = Header(default=None),
 ):
     """스캔 이미지들을 판독해 응시자별 답안을 반환한다.
@@ -170,7 +171,8 @@ async def read_scans(
 
             for name, img_path in targets:
                 try:
-                    r = read_omr(img_path, tpl_path, params=params)
+                    r = read_omr(img_path, tpl_path, params=params,
+                                 make_preview=include_preview)
                 except Exception as e:
                     problems.append({"filename": name, "error": str(e)})
                     continue
@@ -188,6 +190,10 @@ async def read_scans(
                     "selections": {str(q): v for q, v in r.selections().items()},
                     "review_flags": r.review_flags,
                 })
+                if include_preview and r.preview_jpeg:
+                    # 판독기가 실제로 본 이미지(원근 보정 + 판정 표시)
+                    results[-1]["preview_jpeg_base64"] = base64.b64encode(
+                        r.preview_jpeg).decode("ascii")
     return {"results": results, "problems": problems}
 
 

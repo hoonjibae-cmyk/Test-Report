@@ -57,6 +57,9 @@ class ReadResult:
     id_columns: dict         # {col: GroupResult}
     review_flags: list       # 사람 검수가 필요한 항목 목록
     warped_shape: tuple
+    # 검수 화면에 띄울 미리보기 — 보정된 이미지에 판독 결과를 그린 JPEG.
+    # 필요할 때만 만든다(make_preview=True).
+    preview_jpeg: bytes | None = None
 
     def answers(self) -> dict:
         """{문항: 1-base 보기번호 또는 None} — 단일 선택 문항 기준."""
@@ -161,7 +164,14 @@ def _judge_group(fills: dict, params: ReadParams):
 
 
 def read_omr(image_path: str, template_path: str, params: ReadParams | None = None,
-             debug_out: str | None = None) -> ReadResult:
+             debug_out: str | None = None, make_preview: bool = False,
+             preview_width: int = 1100, preview_quality: int = 72) -> ReadResult:
+    """스캔 한 장을 판독한다.
+
+    make_preview=True면 검수 화면용 미리보기(JPEG)를 함께 만든다. 원본이 아니라
+    **판독기가 실제로 본 이미지**(원근 보정 후 + 감지 결과 표시)라, 잘못 읽힌 경우
+    사람이 이유를 바로 알 수 있다.
+    """
     params = params or ReadParams()
     with open(template_path, encoding="utf-8") as fp:
         template = json.load(fp)
@@ -241,8 +251,13 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
             review_flags.append({"type": "id", "col": col, "status": "review"})
     student_id_bubbles = id_digits or None
 
-    if debug_out:
-        _draw_debug(warped, template, questions, id_columns, r, Wc, Hc, debug_out)
+    preview_jpeg = None
+    if debug_out or make_preview:
+        vis = _annotate(warped, template, questions, id_columns, r, Wc, Hc)
+        if debug_out:
+            cv2.imwrite(debug_out, vis)
+        if make_preview:
+            preview_jpeg = _encode_preview(vis, preview_width, preview_quality)
 
     return ReadResult(
         exam_id=exam_id or template.get("exam_id"),
@@ -253,10 +268,22 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         id_columns=id_columns,
         review_flags=review_flags,
         warped_shape=(Wc, Hc),
+        preview_jpeg=preview_jpeg,
     )
 
 
-def _draw_debug(warped, template, questions, id_columns, r, Wc, Hc, out_path):
+def _encode_preview(vis, width: int, quality: int) -> bytes | None:
+    """검수 화면용으로 폭을 줄여 JPEG로 인코딩한다(전송량 절감)."""
+    h, w = vis.shape[:2]
+    if w > width:
+        scale = width / w
+        vis = cv2.resize(vis, (width, max(1, int(round(h * scale)))), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    return buf.tobytes() if ok else None
+
+
+def _annotate(warped, template, questions, id_columns, r, Wc, Hc):
+    """보정된 이미지 위에 버블별 판정 결과를 그린 컬러 이미지를 만든다."""
     vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
     color = {"ok": (0, 170, 0), "blank": (160, 160, 160), "multiple": (0, 0, 220)}
     lut = {(b["role"], b["index"], b["value"]): b for b in template["bubbles"]}
@@ -268,4 +295,4 @@ def _draw_debug(warped, template, questions, id_columns, r, Wc, Hc, out_path):
                 picked = value in g.selected
                 c = color.get(g.status, (200, 200, 0)) if picked else (210, 210, 210)
                 cv2.circle(vis, (cx, cy), r, c, 2 if picked else 1)
-    cv2.imwrite(out_path, vis)
+    return vis
