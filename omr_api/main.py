@@ -69,7 +69,7 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-08-29.1",
+        "version": "2026-08-29.2",
         "pdf": pdf_ok,
     }
 
@@ -189,6 +189,14 @@ async def read_scans(
                     # '모두 고르기' 문항 대응: 칠해진 보기를 전부 담는다.
                     "selections": {str(q): v for q, v in r.selections().items()},
                     "review_flags": r.review_flags,
+                    # 자동 검수 통과 판단용 — 경계에 걸친 것만 추린다.
+                    # (확실한 미표기는 여기 들어가지 않는다: 학생이 안 푼 문항이다)
+                    "uncertain_questions": r.uncertain_questions(),
+                    "multi_marked_questions": r.multi_marked_questions(),
+                    "id_uncertain": any(
+                        f.get("type") == "id" for f in r.review_flags
+                    ),
+                    "id_conflict": r.id_conflict(),
                 })
                 if include_preview and r.preview_jpeg:
                     # 판독기가 실제로 본 이미지(원근 보정 + 판정 표시)

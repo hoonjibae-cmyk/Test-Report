@@ -524,6 +524,161 @@ def test_scorer_stats():
     assert by["A"]["class_size"] == 3
 
 
+
+
+def _mark(img, layout, mm2px, role, index, value, shade, scale=0.8):
+    """버블 하나를 지정한 진하기로 칠한다(255=흰색, 0=검정)."""
+    bub = {(b.role, b.index, b.value): b for b in layout.bubbles}
+    b = bub[(role, index, value)]
+    r = int(mm2px(layout.bubble_radius_mm) * scale)
+    cv2.circle(img, (mm2px(b.x_mm), mm2px(b.y_mm)), r, (shade, shade, shade), -1)
+
+
+def _read_shaded(marks, num_questions=8, id_digits=4, tag="C"):
+    """marks = [(role, index, value, shade, scale?), ...] 를 칠한 뒤 판독한다."""
+    import numpy as np
+
+    d = _tmp()
+    cfg = SheetConfig(exam_id=tag, num_questions=num_questions, num_choices=5,
+                      id_digits=id_digits)
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    layout = build_layout(cfg)
+    img = cv2.cvtColor(np.array(render_image(layout, dpi=200)), cv2.COLOR_RGB2BGR)
+    mm2px = lambda v: int(round(v / 25.4 * 200))  # noqa: E731
+    for m in marks:
+        _mark(img, layout, mm2px, *m)
+    p = os.path.join(d, f"{tag}.png")
+    cv2.imwrite(p, img)
+    return read_omr(p, res["template"], params=ReadParams())
+
+
+def test_untouched_question_is_confidently_blank():
+    """아무도 손대지 않은 문항은 '확실한 미표기'여야 한다.
+
+    이게 무너지면 문항을 비운 학생마다 검수 대상이 되어, 자동 검수 통과가
+    사실상 아무도 통과하지 못하는 기능이 된다.
+    """
+    rr = _read_shaded([("question", 1, 0, 20)], tag="CB")
+    assert rr.questions[1].status == "ok"
+    # 손대지 않은 나머지 문항은 전부 확실한 미표기
+    for q, g in rr.questions.items():
+        if q == 1:
+            continue
+        assert g.status == "blank"
+        assert g.certain, f"{q}번: 빈 문항인데 검수 대상으로 잡혔다"
+    assert rr.uncertain_questions() == []
+
+
+def test_judgment_confidence_bands():
+    """채움률에 따라 '확실 / 회색지대'가 어디서 갈리는지 못박는다.
+
+    이미지를 칠해 만드는 대신 채움률을 직접 넣어 판정만 검사한다. 경계값이
+    스캔 품질에 흔들리지 않아, 기준을 바꾸면 여기서 바로 드러난다.
+
+    실측 기준: 왜곡·노이즈가 있는 스캔에서 빈 버블은 최대 0.19, 실제 마킹은
+    0.86 언저리. 그래서 회색지대는 대략 0.26~0.30(표기 임계) 사이다.
+    """
+    from omr.reader import _judge_group
+
+    p = ReadParams()
+    j = lambda fills: _judge_group(fills, p)  # noqa: E731
+
+    def flat(best, second=0.0):
+        return {0: best, 1: second, 2: 0.05, 3: 0.05, 4: 0.05}
+
+    # 완전 빈칸 · 노이즈 수준 → 확실한 미표기(학생이 안 푼 문항, 검수 불필요)
+    for best in (0.02, 0.10, 0.19):
+        _, status, _, certain = j(flat(best))
+        assert (status, certain) == ("blank", True), f"채움률 {best}"
+
+    # 임계 바로 아래 → 회색지대(놓친 표기일 수 있으니 사람이 확인)
+    for best in (0.27, 0.29):
+        _, status, _, certain = j(flat(best))
+        assert (status, certain) == ("blank", False), f"채움률 {best}"
+
+    # 임계는 넘겼지만 아슬아슬 → 표기로 읽되 확신하지 않는다
+    _, status, _, certain = j(flat(0.33))
+    assert (status, certain) == ("ok", False)
+
+    # 또렷한 단독 표기 → 확실
+    _, status, _, certain = j(flat(0.86))
+    assert (status, certain) == ("ok", True)
+
+    # 진한 표기 옆에 지운 자국 → 판독값은 나오지만 확신하지 않는다
+    _, status, selected, certain = j(flat(0.86, 0.50))
+    assert status == "ok" and selected == [0] and not certain
+
+    # 둘 다 또렷 → 중복 표기로 읽고, 정상 여부는 채점 쪽이 판단
+    _, status, selected, certain = j(flat(0.86, 0.80))
+    assert status == "multiple" and selected == [0, 1] and certain
+
+
+def test_clean_mark_is_certain():
+    """또렷하게 칠한 단독 표기는 확신 있게 읽어 자동 통과 대상이 된다."""
+    rr = _read_shaded([("question", q, q % 5, 20) for q in range(1, 9)], tag="CC")
+    assert rr.uncertain_questions() == []
+    assert rr.multi_marked_questions() == []
+    for q, g in rr.questions.items():
+        assert g.status == "ok" and g.certain
+
+
+def test_erasure_next_to_a_mark_is_uncertain():
+    """지운 자국이 남은 문항은 판독값이 나와도 확신하지 않는다."""
+    rr = _read_shaded(
+        [("question", 4, 1, 20), ("question", 4, 3, 120, 0.75)], tag="CE",
+    )
+    g = rr.questions[4]
+    assert 4 in rr.uncertain_questions() or g.status == "multiple", (
+        "진한 표기 옆의 지움 자국은 그냥 넘어가면 안 된다"
+    )
+
+
+def test_multi_marked_questions_are_reported_separately():
+    """복수 표기는 '확신 없음'이 아니라 별도 목록으로 넘긴다.
+
+    '모두 고르기' 문항이면 정상이므로, 정상/검수 판단은 정답을 아는 채점 쪽 몫이다.
+    """
+    rr = _read_shaded(
+        [("question", 2, 0, 20), ("question", 2, 2, 20), ("question", 2, 4, 20)],
+        tag="CM",
+    )
+    assert rr.selections()[2] == [1, 3, 5]
+    assert rr.multi_marked_questions() == [2]
+    # 셋 다 또렷하니 '경계에 걸쳐 애매한' 문항은 아니다
+    assert 2 not in rr.uncertain_questions()
+
+
+def test_id_conflict_only_when_both_sources_disagree():
+    """QR과 버블 수험번호는 둘 다 있을 때만 비교한다(빈 답안지는 QR에 학번이 없다)."""
+    rr = _read_shaded([("question", 1, 0, 20)], tag="CI")
+    assert rr.student_id_qr is None, "빈 답안지 QR에는 수험번호가 없다"
+    assert rr.id_conflict() is False, "비교 대상이 없으면 불일치로 보지 않는다"
+
+    rr.student_id_qr, rr.student_id_bubbles = "0123", "123"
+    assert rr.id_conflict() is False, "앞의 0만 다른 것은 같은 번호다"
+    rr.student_id_bubbles = "124"
+    assert rr.id_conflict() is True
+
+
+def test_faint_id_digit_does_not_silently_shorten_the_number():
+    """마지막 자리를 흐리게 칠했다면 잘라내지 말고 검수로 넘긴다.
+
+    예전에는 뒤쪽 빈칸을 무조건 잘라내서, 흐린 마지막 자리가 조용히 사라진
+    수험번호가 만들어질 수 있었다.
+    """
+    rr = _read_shaded(
+        [("id", 0, 1, 20), ("id", 1, 2, 20), ("id", 2, 3, 20),
+         ("id", 3, 4, 150, 0.55)],
+        tag="CD",
+    )
+    flags = [f for f in rr.review_flags if f.get("type") == "id"]
+    assert flags, "흐린 수험번호 자리는 검수 대상이어야 한다"
+    assert rr.student_id_bubbles is not None
+    assert len(rr.student_id_bubbles) == 4, (
+        f"흐린 자리가 잘려 수험번호가 짧아졌다: {rr.student_id_bubbles!r}"
+    )
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

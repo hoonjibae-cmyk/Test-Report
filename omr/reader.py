@@ -26,6 +26,19 @@ class ReadParams:
     mark_abs_min: float = 0.30       # 마킹으로 인정할 최소 채움률
     ambiguous_ratio: float = 0.70    # 2순위/1순위 비율이 이 값 이상이면 중복 의심
 
+    # --- 판정 여유(margin) ---
+    # 위 두 기준은 '어떻게 읽을지'만 정할 뿐, '얼마나 확실한지'는 말해 주지 않는다.
+    # 채움률 0.02(완전 빈칸)와 0.29(흐린 표기)는 둘 다 미표기로 읽히지만 확신은
+    # 전혀 다르다. 아래 값으로 경계에서 얼마나 떨어져야 '확실'로 볼지 정한다.
+    # 확실한 것만 자동 검수 통과시키고, 경계 근처(회색지대)는 사람에게 넘긴다.
+    # 기준값은 왜곡·노이즈를 넣은 모의 스캔에서 실측해 잡았다. 빈 버블도 인쇄된
+    # 숫자와 종이 질감 때문에 채움률이 0이 아니라 최대 0.19까지 올라가고, 실제
+    # 마킹은 0.86 언저리에 몰린다. 그래서 '확실한 빈칸' 선을 노이즈 바닥보다
+    # 위(0.30×0.85≈0.26)에 두어, 노이즈를 애매한 표기로 오해하지 않게 한다.
+    blank_margin: float = 0.85       # 1순위 < mark_abs_min×이 값 → 확실한 미표기
+    mark_margin: float = 1.35        # 1순위 ≥ mark_abs_min×이 값 → 확실한 표기
+    ratio_margin: float = 0.75       # 2순위/1순위 ≤ ambiguous_ratio×이 값 → 확실한 단독
+
 
 @dataclass
 class BubbleReading:
@@ -44,6 +57,8 @@ class GroupResult:
     # 실제로 칠해진 것으로 판정한 모든 value(오름차순). '모두 고르기' 문항에서
     # 학생이 여러 개를 칠하면 여기에 전부 담긴다. 무응답이면 빈 리스트.
     selected: list = field(default_factory=list)
+    # 판정이 경계에서 충분히 떨어져 있는가. False면 사람이 눈으로 봐야 한다.
+    certain: bool = True
 
 
 @dataclass
@@ -81,6 +96,29 @@ class ReadResult:
         if self.student_id_qr:
             return self.student_id_qr
         return self.student_id_bubbles
+
+    def id_conflict(self) -> bool:
+        """QR과 버블이 서로 다른 수험번호를 가리키는가.
+
+        학생별 답안지로 출력했을 때만 의미가 있다(빈 답안지는 QR에 수험번호가
+        없다). 둘이 어긋났다는 건 답안지를 다른 학생이 썼거나 마킹을 잘못한
+        것이므로, 성적표가 엉뚱한 학생에게 가지 않도록 반드시 사람이 봐야 한다.
+        """
+        if not self.student_id_qr or not self.student_id_bubbles:
+            return False
+        return self.student_id_qr.lstrip("0") != self.student_id_bubbles.lstrip("0")
+
+    def uncertain_questions(self) -> list:
+        """판정이 경계에 걸쳐 사람이 눈으로 봐야 하는 문항 번호."""
+        return sorted(q for q, g in self.questions.items() if not g.certain)
+
+    def multi_marked_questions(self) -> list:
+        """둘 이상 칠해진 것으로 읽은 문항 번호.
+
+        '모두 고르기' 문항이면 정상이라 판독기는 판단하지 않는다. 어떤 문항이
+        복수 정답인지 아는 채점 쪽에서 정상/검수를 가른다.
+        """
+        return sorted(q for q, g in self.questions.items() if len(g.selected) > 1)
 
 
 def _detect_markers(gray: np.ndarray) -> dict:
@@ -143,24 +181,41 @@ def _fill_ratio(binv: np.ndarray, cx: int, cy: int, r: int) -> float:
 
 
 def _judge_group(fills: dict, params: ReadParams):
-    """채움률 딕셔너리로 (최다 선택, 상태, 선택 목록)을 판정한다.
+    """채움률 딕셔너리로 (최다 선택, 상태, 선택 목록, 확신 여부)를 판정한다.
 
     선택 목록에는 1순위와 '1순위에 견줄 만큼 진한' 나머지를 담는다. 옅은 지움
     자국은 임계를 넘더라도 1순위 대비 비율이 낮으면 제외해, 단일 선택 문항의
     오검출을 막으면서 '모두 고르기'의 복수 표기는 놓치지 않는다.
+
+    확신 여부는 판정 자체와 별개다. 같은 '미표기'라도 아무것도 안 칠한 답안지와
+    연필이 흐려 임계를 아슬아슬하게 못 넘긴 답안지를 구분해야, 사람이 봐야 할
+    것만 골라낼 수 있다.
     """
     ordered = sorted(fills.items(), key=lambda kv: kv[1], reverse=True)
     best_v, best_f = ordered[0]
+    second_f = ordered[1][1] if len(ordered) > 1 else 0.0
+
     if best_f < params.mark_abs_min:
-        return None, "blank", []
+        # 확실한 미표기 = 가장 진한 것조차 임계에 한참 못 미침(빈칸으로 봐도 무방)
+        return None, "blank", [], best_f < params.mark_abs_min * params.blank_margin
+
     selected = [best_v]
     for value, fill in ordered[1:]:
         if fill >= params.mark_abs_min and fill / best_f >= params.ambiguous_ratio:
             selected.append(value)
     selected.sort()
+
+    # 칠해진 것으로 본 모든 보기가 임계에서 충분히 위에 있어야 확실하다.
+    strong = all(fills[v] >= params.mark_abs_min * params.mark_margin for v in selected)
+
     if len(selected) > 1:
-        return best_v, "multiple", selected
-    return best_v, "ok", selected
+        # 중복 표기 자체는 '무엇이 칠해졌나'만 말한다. 단일 선택 문항이라면
+        # 어느 것을 인정할지 사람이 정해야 하므로, 판단은 호출 측에 맡긴다.
+        return best_v, "multiple", selected, strong
+
+    # 단독 표기는 2순위가 중복 의심선에서도 충분히 아래여야 확실하다.
+    clear = second_f / best_f <= params.ambiguous_ratio * params.ratio_margin
+    return best_v, "ok", selected, strong and clear
 
 
 def read_omr(image_path: str, template_path: str, params: ReadParams | None = None,
@@ -225,30 +280,35 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     review_flags: list = []
 
     for q in sorted(q_groups):
-        chosen, status, selected = _judge_group(q_groups[q], params)
-        questions[q] = GroupResult(q, chosen, status, q_groups[q], selected)
+        chosen, status, selected, certain = _judge_group(q_groups[q], params)
+        questions[q] = GroupResult(q, chosen, status, q_groups[q], selected, certain)
         if status != "ok":
             # 복수 표기는 '모두 고르기' 문항이면 정상이므로, 무엇이 칠해졌는지 함께 넘긴다.
             review_flags.append({
                 "type": "question", "no": q, "status": status,
                 "selected": [v + 1 for v in selected],
+                # 확실한 미표기(=학생이 그냥 안 푼 문항)는 사람이 볼 필요가 없다.
+                "certain": certain,
             })
 
     # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
     id_cells = []            # (col, digit or None, blank?)
     for col in sorted(id_groups):
-        chosen, status, selected = _judge_group(id_groups[col], params)
-        id_columns[col] = GroupResult(col, chosen, status, id_groups[col], selected)
+        chosen, status, selected, certain = _judge_group(id_groups[col], params)
+        id_columns[col] = GroupResult(col, chosen, status, id_groups[col], selected, certain)
         digit = str(chosen) if (status == "ok" and chosen is not None) else None
-        id_cells.append((col, digit, status == "blank"))
-    # 뒤쪽 연속 빈칸 제거(4~5자리 좌측정렬 대응)
-    while id_cells and id_cells[-1][2]:
+        id_cells.append((col, digit, status == "blank", certain))
+    # 뒤쪽 연속 빈칸 제거(4~5자리 좌측정렬 대응) — 단, 확실한 빈칸만 잘라낸다.
+    # 흐린 표기를 빈칸으로 오해해 잘라 버리면 수험번호가 조용히 짧아진다.
+    while id_cells and id_cells[-1][2] and id_cells[-1][3]:
         id_cells.pop()
     id_digits = ""
-    for col, digit, _blank in id_cells:
+    for col, digit, _blank, certain in id_cells:
         id_digits += digit if digit is not None else "?"
         if digit is None:  # 중간의 빈칸/중복은 검수 대상
-            review_flags.append({"type": "id", "col": col, "status": "review"})
+            review_flags.append({"type": "id", "col": col, "status": "review", "certain": False})
+        elif not certain:  # 읽기는 했지만 경계에 걸친 자리 — 수험번호는 틀리면 치명적이라 확인
+            review_flags.append({"type": "id", "col": col, "status": "weak", "certain": False})
     student_id_bubbles = id_digits or None
 
     preview_jpeg = None
@@ -283,16 +343,29 @@ def _encode_preview(vis, width: int, quality: int) -> bytes | None:
 
 
 def _annotate(warped, template, questions, id_columns, r, Wc, Hc):
-    """보정된 이미지 위에 버블별 판정 결과를 그린 컬러 이미지를 만든다."""
+    """보정된 이미지 위에 버블별 판정 결과를 그린 컬러 이미지를 만든다.
+
+    확신 없는 판정(회색지대)은 주황으로 따로 표시한다. 검수 화면에 걸린 답안지가
+    '왜 걸렸는지'를 사람이 그림에서 바로 찾을 수 있어야 하기 때문이다.
+    """
     vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
     color = {"ok": (0, 170, 0), "blank": (160, 160, 160), "multiple": (0, 0, 220)}
+    uncertain_c = (0, 150, 255)      # 주황(BGR) — 경계에 걸쳐 사람이 봐야 하는 자리
     lut = {(b["role"], b["index"], b["value"]): b for b in template["bubbles"]}
     for grp, role in ((questions, "question"), (id_columns, "id")):
         for key, g in grp.items():
+            best = max(g.fills.values()) if g.fills else 0.0
             for value, fill in g.fills.items():
                 b = lut[(role, key, value)]
                 cx, cy = int(b["u"] * Wc), int(b["v"] * Hc)
                 picked = value in g.selected
-                c = color.get(g.status, (200, 200, 0)) if picked else (210, 210, 210)
+                if picked:
+                    c = uncertain_c if not g.certain else color.get(g.status, (200, 200, 0))
+                elif not g.certain and fill >= best:
+                    # 표기로 인정하진 않았지만 이 자리 때문에 애매해진 것 — 짚어 준다
+                    c = uncertain_c
+                    picked = True
+                else:
+                    c = (210, 210, 210)
                 cv2.circle(vis, (cx, cy), r, c, 2 if picked else 1)
     return vis
