@@ -143,7 +143,29 @@ class Layout:
                 }
                 for b in self.bubbles
             ],
+            # 주관식 손기입 칸 — 버블이 없어 채점에는 쓰이지 않지만, 판독기가
+            # 이 자리를 알아야 학생이 쓴 답을 잘라내 전사할 수 있다.
+            # 좌표는 버블과 같은 정준 좌표(0~1)라 같은 변환을 그대로 쓴다.
+            "essay_boxes": [
+                {
+                    "num": box["num"],
+                    "label": box.get("label", ""),
+                    "u0": round(self._u(box["x0"]), 6),
+                    "v0": round(self._v(box["y0"]), 6),
+                    "u1": round(self._u(box["x1"]), 6),
+                    "v1": round(self._v(box["y1"]), 6),
+                }
+                for box in (self.essay_boxes_mm or [])
+            ],
         }
+
+    def _u(self, x_mm: float) -> float:
+        """mm 가로 좌표 → 정준 좌표(0~1)"""
+        return (x_mm - self.ref_left_mm) / (self.ref_right_mm - self.ref_left_mm)
+
+    def _v(self, y_mm: float) -> float:
+        """mm 세로 좌표 → 정준 좌표(0~1)"""
+        return (y_mm - self.ref_top_mm) / (self.ref_bottom_mm - self.ref_top_mm)
 
 
 def build_layout(config: SheetConfig) -> Layout:

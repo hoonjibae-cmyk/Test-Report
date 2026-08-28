@@ -75,6 +75,8 @@ class ReadResult:
     # 검수 화면에 띄울 미리보기 — 보정된 이미지에 판독 결과를 그린 JPEG.
     # 필요할 때만 만든다(make_preview=True).
     preview_jpeg: bytes | None = None
+    # {문항번호: JPEG} — 주관식 손기입 칸을 반듯하게 편 이미지(전사용)
+    essay_crops: dict = field(default_factory=dict)
 
     def answers(self) -> dict:
         """{문항: 1-base 보기번호 또는 None} — 단일 선택 문항 기준."""
@@ -152,7 +154,48 @@ def _warp_to_canonical(gray: np.ndarray, centers: dict, template: dict, params: 
 
     M = cv2.getPerspectiveTransform(src, dst)
     warped = cv2.warpPerspective(gray, M, (Wc, Hc))
-    return warped, (Wc, Hc)
+    return warped, (Wc, Hc), M
+
+
+def _crop_essay_boxes(gray: np.ndarray, template: dict, M: np.ndarray,
+                      Wc: int, Hc: int, scale: float = 3.0,
+                      quality: int = 88) -> dict:
+    """주관식 손기입 칸을 반듯하게 펴서 잘라낸다.
+
+    정준 이미지(가로 1400px)에서 자르면 한 칸이 400px 남짓이라 손글씨 획이
+    뭉개진다. 그래서 원본 스캔에서 그 자리만 다시 펴서 배로 키워 잘라낸다.
+    글자를 읽어야 하는 이미지이므로 해상도가 정확도를 좌우한다.
+
+    반환: {문항번호: JPEG bytes}
+    """
+    boxes = template.get("essay_boxes") or []
+    if not boxes:
+        return {}
+    try:
+        inv = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return {}
+
+    out = {}
+    for box in boxes:
+        # 정준 좌표의 네 모서리를 원본 스캔 좌표로 되돌린다
+        corners = np.array([
+            [box["u0"] * Wc, box["v0"] * Hc],
+            [box["u1"] * Wc, box["v0"] * Hc],
+            [box["u1"] * Wc, box["v1"] * Hc],
+            [box["u0"] * Wc, box["v1"] * Hc],
+        ], dtype=np.float32).reshape(-1, 1, 2)
+        src = cv2.perspectiveTransform(corners, inv).reshape(4, 2).astype(np.float32)
+
+        w = max(1, int(round((box["u1"] - box["u0"]) * Wc * scale)))
+        h = max(1, int(round((box["v1"] - box["v0"]) * Hc * scale)))
+        dst = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
+        patch = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(src, dst), (w, h))
+
+        ok, buf = cv2.imencode(".jpg", patch, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if ok:
+            out[int(box["num"])] = buf.tobytes()
+    return out
 
 
 def _binarize(warped: np.ndarray) -> np.ndarray:
@@ -220,7 +263,8 @@ def _judge_group(fills: dict, params: ReadParams):
 
 def read_omr(image_path: str, template_path: str, params: ReadParams | None = None,
              debug_out: str | None = None, make_preview: bool = False,
-             preview_width: int = 1100, preview_quality: int = 72) -> ReadResult:
+             preview_width: int = 1100, preview_quality: int = 72,
+             make_essay_crops: bool = False) -> ReadResult:
     """스캔 한 장을 판독한다.
 
     make_preview=True면 검수 화면용 미리보기(JPEG)를 함께 만든다. 원본이 아니라
@@ -254,7 +298,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         pass
 
     centers = _detect_markers(gray)
-    warped, (Wc, Hc) = _warp_to_canonical(gray, centers, template, params)
+    warped, (Wc, Hc), M = _warp_to_canonical(gray, centers, template, params)
     binv = _binarize(warped)
 
     ref_w = template["ref_w_mm"]
@@ -311,6 +355,9 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
             review_flags.append({"type": "id", "col": col, "status": "weak", "certain": False})
     student_id_bubbles = id_digits or None
 
+    # 주관식 칸 이미지 — 전사(글자 읽기)에 쓴다. 필요할 때만 만든다.
+    essay_crops = _crop_essay_boxes(gray, template, M, Wc, Hc) if make_essay_crops else {}
+
     preview_jpeg = None
     if debug_out or make_preview:
         vis = _annotate(warped, template, questions, id_columns, r, Wc, Hc)
@@ -329,6 +376,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         review_flags=review_flags,
         warped_shape=(Wc, Hc),
         preview_jpeg=preview_jpeg,
+        essay_crops=essay_crops,
     )
 
 

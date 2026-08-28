@@ -679,6 +679,66 @@ def test_faint_id_digit_does_not_silently_shorten_the_number():
     )
 
 
+def test_essay_boxes_reach_the_reader():
+    """주관식 칸 좌표가 판독 템플릿에 실려야 전사를 위해 잘라낼 수 있다.
+
+    예전에는 렌더러만 알고 판독기는 몰라서, 학생이 쓴 답이 어디 있는지
+    판독기가 찾을 방법이 없었다.
+    """
+    cfg = SheetConfig(exam_id="EB", num_questions=20, num_choices=5, id_digits=5,
+                      questions_per_column=10, essay_count=3, style="exam")
+    tpl = build_layout(cfg).template_dict(200)
+    boxes = tpl.get("essay_boxes")
+    assert boxes and len(boxes) == 3
+    assert [b["num"] for b in boxes] == [21, 22, 23]
+    for b in boxes:
+        # 버블과 같은 정준 좌표(0~1)여야 같은 변환을 그대로 쓸 수 있다
+        assert 0.0 <= b["u0"] < b["u1"] <= 1.0, b
+        assert 0.0 <= b["v0"] < b["v1"] <= 1.0, b
+
+    # 서술형이 없으면 빈 목록
+    plain = SheetConfig(exam_id="EB2", num_questions=20, num_choices=5, id_digits=5)
+    assert build_layout(plain).template_dict(200)["essay_boxes"] == []
+
+
+def test_essay_crops_are_deskewed_and_readable():
+    """왜곡된 스캔에서도 주관식 칸을 반듯하게, 읽을 만한 해상도로 잘라낸다.
+
+    전사(글자 읽기)에 쓸 이미지라 해상도가 정확도를 좌우한다. 정준 이미지에서
+    자르면 획이 뭉개지므로 원본에서 다시 펴서 키워 잘라야 한다.
+    """
+    d = _tmp()
+    cfg = SheetConfig(exam_id="EC", title="영작", num_questions=20, num_choices=5,
+                      id_digits=5, questions_per_column=10, essay_count=2, style="exam")
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    scan = simulate_marked(cfg, {q: 2 for q in range(1, 21)}, "1234",
+                           dpi=210, distort=True, seed=3)
+    p = os.path.join(d, "scan.png")
+    cv2.imwrite(p, scan)
+
+    r = read_omr(p, res["template"], make_essay_crops=True)
+    assert set(r.essay_crops) == {21, 22}
+
+    import numpy as np
+
+    layout = build_layout(cfg)
+    for num, jpg in r.essay_crops.items():
+        img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_GRAYSCALE)
+        assert img is not None
+        # 정준 이미지에서 그냥 자른 것보다 확실히 커야 한다(획이 살아 있게)
+        assert img.shape[1] >= 900, f"{num}번 크롭이 너무 작다: {img.shape}"
+        # 칸의 가로세로 비를 지켜야 글자가 찌그러지지 않는다
+        box = next(b for b in layout.essay_boxes_mm if b["num"] == num)
+        want = (box["x1"] - box["x0"]) / (box["y1"] - box["y0"])
+        got = img.shape[1] / img.shape[0]
+        assert abs(got - want) / want < 0.05, f"{num}번 비율 어긋남 {got:.2f} vs {want:.2f}"
+        # 전송할 이미지이므로 한 장이 지나치게 무거우면 안 된다
+        assert len(jpg) < 250 * 1024, f"{num}번 크롭이 {len(jpg)//1024}KB로 너무 크다"
+
+    # 기본값에서는 만들지 않는다(필요할 때만 비용을 낸다)
+    assert read_omr(p, res["template"]).essay_crops == {}
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
