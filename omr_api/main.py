@@ -69,7 +69,7 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-08-28.1",
+        "version": "2026-08-28.2",
         "pdf": pdf_ok,
     }
 
@@ -114,8 +114,10 @@ async def read_scans(
     spec을 주면 서버가 동일 설정으로 템플릿을 재생성하므로, 호출 측은 작은 설정만
     저장하면 된다(생성 시 쓴 설정과 같아야 함).
 
-    반환: {results:[{filename, student_id, answers{문항:보기|null}, review_flags,
+    반환: {results:[{filename, student_id, answers{문항:보기|null},
+                     selections{문항:[보기,...]}, review_flags,
                      student_id_qr, student_id_bubbles, exam_id}], problems:[...]}
+    `answers`는 단일 선택 기준(중복 표기는 null), `selections`는 칠해진 보기 전부다.
     """
     _check_key(x_api_key)
     if not template and not spec:
@@ -175,6 +177,8 @@ async def read_scans(
                     "sheet_layout": r.layout_fingerprint,
                     "expected_layout": json.loads(template).get("layout_fingerprint"),
                     "answers": {str(q): v for q, v in r.answers().items()},
+                    # '모두 고르기' 문항 대응: 칠해진 보기를 전부 담는다.
+                    "selections": {str(q): v for q, v in r.selections().items()},
                     "review_flags": r.review_flags,
                 })
     return {"results": results, "problems": problems}

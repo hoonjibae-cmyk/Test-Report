@@ -38,9 +38,12 @@ class BubbleReading:
 @dataclass
 class GroupResult:
     key: int                 # question no 또는 id 자릿수 열
-    chosen: int | None       # 선택된 value (question: 0-base 보기 / id: 숫자) / None
+    chosen: int | None       # 가장 진하게 칠해진 value (question: 0-base 보기 / id: 숫자) / None
     status: str              # "ok" | "blank" | "multiple"
     fills: dict              # {value: fill_ratio}
+    # 실제로 칠해진 것으로 판정한 모든 value(오름차순). '모두 고르기' 문항에서
+    # 학생이 여러 개를 칠하면 여기에 전부 담긴다. 무응답이면 빈 리스트.
+    selected: list = field(default_factory=list)
 
 
 @dataclass
@@ -56,11 +59,19 @@ class ReadResult:
     warped_shape: tuple
 
     def answers(self) -> dict:
-        """{문항: 1-base 보기번호 또는 None} — 채점기 입력용."""
+        """{문항: 1-base 보기번호 또는 None} — 단일 선택 문항 기준."""
         out = {}
         for q, g in self.questions.items():
             out[q] = (g.chosen + 1) if (g.status == "ok" and g.chosen is not None) else None
         return out
+
+    def selections(self) -> dict:
+        """{문항: [1-base 보기번호, ...]} — 칠해진 것을 전부 담는다.
+
+        '모두 고르기' 문항은 이 값으로 채점한다. 단일 선택 문항이라면 원소가
+        1개(정상) 또는 2개 이상(중복 표기 — 검수 대상)이 된다.
+        """
+        return {q: [v + 1 for v in g.selected] for q, g in self.questions.items()}
 
     def resolved_student_id(self) -> str | None:
         """QR 우선, 없으면 버블에서 조립한 학번."""
@@ -129,15 +140,24 @@ def _fill_ratio(binv: np.ndarray, cx: int, cy: int, r: int) -> float:
 
 
 def _judge_group(fills: dict, params: ReadParams):
-    """채움률 딕셔너리로 선택/상태 판정."""
+    """채움률 딕셔너리로 (최다 선택, 상태, 선택 목록)을 판정한다.
+
+    선택 목록에는 1순위와 '1순위에 견줄 만큼 진한' 나머지를 담는다. 옅은 지움
+    자국은 임계를 넘더라도 1순위 대비 비율이 낮으면 제외해, 단일 선택 문항의
+    오검출을 막으면서 '모두 고르기'의 복수 표기는 놓치지 않는다.
+    """
     ordered = sorted(fills.items(), key=lambda kv: kv[1], reverse=True)
     best_v, best_f = ordered[0]
-    second_f = ordered[1][1] if len(ordered) > 1 else 0.0
     if best_f < params.mark_abs_min:
-        return None, "blank"
-    if second_f >= params.mark_abs_min and (best_f == 0 or second_f / best_f >= params.ambiguous_ratio):
-        return best_v, "multiple"
-    return best_v, "ok"
+        return None, "blank", []
+    selected = [best_v]
+    for value, fill in ordered[1:]:
+        if fill >= params.mark_abs_min and fill / best_f >= params.ambiguous_ratio:
+            selected.append(value)
+    selected.sort()
+    if len(selected) > 1:
+        return best_v, "multiple", selected
+    return best_v, "ok", selected
 
 
 def read_omr(image_path: str, template_path: str, params: ReadParams | None = None,
@@ -195,16 +215,20 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     review_flags: list = []
 
     for q in sorted(q_groups):
-        chosen, status = _judge_group(q_groups[q], params)
-        questions[q] = GroupResult(q, chosen, status, q_groups[q])
+        chosen, status, selected = _judge_group(q_groups[q], params)
+        questions[q] = GroupResult(q, chosen, status, q_groups[q], selected)
         if status != "ok":
-            review_flags.append({"type": "question", "no": q, "status": status})
+            # 복수 표기는 '모두 고르기' 문항이면 정상이므로, 무엇이 칠해졌는지 함께 넘긴다.
+            review_flags.append({
+                "type": "question", "no": q, "status": status,
+                "selected": [v + 1 for v in selected],
+            })
 
     # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
     id_cells = []            # (col, digit or None, blank?)
     for col in sorted(id_groups):
-        chosen, status = _judge_group(id_groups[col], params)
-        id_columns[col] = GroupResult(col, chosen, status, id_groups[col])
+        chosen, status, selected = _judge_group(id_groups[col], params)
+        id_columns[col] = GroupResult(col, chosen, status, id_groups[col], selected)
         digit = str(chosen) if (status == "ok" and chosen is not None) else None
         id_cells.append((col, digit, status == "blank"))
     # 뒤쪽 연속 빈칸 제거(4~5자리 좌측정렬 대응)
@@ -241,7 +265,7 @@ def _draw_debug(warped, template, questions, id_columns, r, Wc, Hc, out_path):
             for value, fill in g.fills.items():
                 b = lut[(role, key, value)]
                 cx, cy = int(b["u"] * Wc), int(b["v"] * Hc)
-                picked = (value == g.chosen)
+                picked = value in g.selected
                 c = color.get(g.status, (200, 200, 0)) if picked else (210, 210, 210)
                 cv2.circle(vis, (cx, cy), r, c, 2 if picked else 1)
     cv2.imwrite(out_path, vis)

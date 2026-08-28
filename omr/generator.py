@@ -337,15 +337,28 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         _centered_text(d, tb_cx, (tb_y0 + tb_y1) // 2, sheet_title,
                        fit_font(sheet_title, tb_x1 - tb_x0 - mm(8), 12, 7), fill="white")
 
+    # --- 학원 로고 (QR 코드 왼쪽, 답란이 올 수 없는 상단 여백 활용) ---
+    # 아래 '표기 요령' 상자가 로고 왼쪽 끝을 알아야 하므로 안내문보다 먼저 그린다.
+    brand_left = _draw_brand(img, d, mm, font, cfg, layout)
+
     # --- 상단 안내문 (제목 밴드 오른쪽, 밴드 상단에 맞춰 정렬) ---
     ins_x = tb_x1 + mm(8)
     ins_y = mm(mt + 8)
-    d.text((ins_x, ins_y), "※ 검은색 컴퓨터용 사인펜만 사용하여 표기하십시오.",
-           font=font(8.0), fill=_INK)
-    d.text((ins_x, ins_y + mm(5.0)), "※ 수험번호는 왼쪽부터 채워 표기(4~5자리).",
-           font=font(8.0), fill=_INK)
-    d.text((ins_x, ins_y + mm(10.0)), "※ 한 문항에 하나만 표기 · 수정 시 수정테이프 사용.",
-           font=font(8.0), fill=_INK)
+    ins_font = font(8.0)
+    ins_lines = [
+        "※ 검은색 컴퓨터용 사인펜만 사용하여 표기하십시오.",
+        "※ 수험번호는 왼쪽부터 채워 표기(4~5자리).",
+        "※ 한 문항에 하나만 표기 — ‘모두 고르기’ 문항은 예외.",
+    ]
+    for i, line in enumerate(ins_lines):
+        d.text((ins_x, ins_y + mm(5.0) * i), line, font=ins_font, fill=_INK)
+    ins_right = ins_x + max(int(d.textlength(line, font=ins_font)) for line in ins_lines)
+
+    # --- 표기 요령 (안내문과 로고 사이의 빈 여백) ---
+    # 문항 열 헤더(mt+24)보다 위에서 끝나도록 높이를 잡아 답란을 침범하지 않는다.
+    _draw_marking_guide(d, mm, font,
+                        ins_right + mm(7), mm(mt + 2.0),
+                        brand_left - mm(7), mm(mt + 22.0))
 
     # --- 좌측 인적사항 박스 (성명 / 학교·학년 / 수강반) ---
     # px0/px1은 제목 밴드에서 이미 계산 — 전 좌측 요소가 같은 두 변에 정렬된다.
@@ -466,12 +479,16 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                 d.line([mm(bx0 + 3), mm(gy), mm(bx1 - 3), mm(gy)], fill=(214, 219, 226), width=mm(0.25))
                 gy += 7
 
-    # --- 학원 로고 (QR 코드 왼쪽, 답란이 올 수 없는 상단 여백 활용) ---
+    return img
+
+
+def _draw_brand(img, d, mm, font, cfg, layout) -> int:
+    """QR 왼쪽에 학원 로고(없으면 이니셜+학원명)를 그리고 그 왼쪽 끝 x(px)를 반환."""
     academy = cfg.academy or "○○학원"
     logo_path = cfg.academy_logo
     qx, qy = layout.qr_xy_mm
     qs = layout.qr_size_mm
-    placed = False
+    right_x = mm(qx) - mm(5)                      # QR 왼쪽에 여백 두고 배치
     if logo_path and os.path.exists(logo_path):
         try:
             logo = Image.open(logo_path).convert("RGBA")
@@ -480,27 +497,102 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
             logo = logo.resize((target_w, target_h), Image.LANCZOS)
             bg = Image.new("RGBA", logo.size, (255, 255, 255, 0))
             bg.alpha_composite(logo)
-            right_x = mm(qx) - mm(5)                      # QR 왼쪽에 여백 두고 배치
             top_y = mm(qy) + (mm(qs) - target_h) // 2     # QR과 세로 중앙 정렬
             img.paste(bg.convert("RGB"), (right_x - target_w, top_y), bg)
-            placed = True
+            return right_x - target_w
         except Exception:
-            placed = False
-    if not placed:
-        lg = mm(11)
-        ac_w = mm(2 + 4.2 * len(academy))
-        top_y = mm(qy) + (mm(qs) - lg) // 2
-        rx = mm(qx) - mm(5)
-        lx = rx - ac_w - lg - mm(2)
-        _brand_mark(d, lx, top_y, lg, academy[0], font(6.5, True))
-        d.text((lx + lg + mm(2), top_y + lg / 2 - mm(2.4)), academy, font=font(10, True), fill=_NAVY)
-
-    return img
+            pass
+    lg = mm(11)
+    ac_w = mm(2 + 4.2 * len(academy))
+    top_y = mm(qy) + (mm(qs) - lg) // 2
+    lx = right_x - ac_w - lg - mm(2)
+    _brand_mark(d, lx, top_y, lg, academy[0], font(6.5, True))
+    d.text((lx + lg + mm(2), top_y + lg / 2 - mm(2.4)), academy, font=font(10, True), fill=_NAVY)
+    return lx
 
 
 def _brand_mark(d, x, y, size, letter, font_obj):
     d.rounded_rectangle([x, y, x + size, y + size], radius=int(size * 0.28), fill=_NAVY)
     _centered_text(d, x + size // 2, y + size // 2, letter, font_obj, fill="white")
+
+
+# 표기 요령 예시 버블. "full"=완전히 칠함, 그 밖은 잘못된 표기, 숫자는 빈 버블 라벨.
+_GUIDE_SECTIONS = [
+    ("바른 표기", ["full"], 5.8),
+    ("‘모두 고르기’ 문항", ["1", "full", "3", "full"], 5.8),
+    ("잘못된 표기", ["half", "dot", "check"], 6.4),
+]
+
+
+def _draw_marking_guide(d, mm, font, x0, y0, x1, y1):
+    """상단 여백에 '바른 표기 / 모두 고르기 / 잘못된 표기' 예시를 그린다.
+
+    좌표는 px. 남는 폭이 모자라면 오른쪽 구역부터 덜어내고, 그래도 좁으면
+    아예 그리지 않는다(답란·로고를 절대 침범하지 않기 위한 안전장치).
+    """
+    avail = x1 - x0
+    if avail < mm(34) or (y1 - y0) < mm(16):
+        return
+
+    r = mm(2.4)
+    label_font = font(6.6, True)
+    caption_cy = y0 + mm(8.2)
+    bubble_cy = y0 + mm(14.6)
+
+    def section_width(spec, pitch_mm):
+        return (len(spec) - 1) * mm(pitch_mm) + 2 * r
+
+    sections = list(_GUIDE_SECTIONS)
+    pad = mm(4)
+    while sections:
+        widths = [
+            max(section_width(spec, pitch), int(d.textlength(title, font=label_font)))
+            for title, spec, pitch in sections
+        ]
+        total = sum(widths) + pad * (len(sections) + 1)
+        if total <= avail:
+            break
+        sections.pop()
+    if not sections:
+        return
+
+    # 상자 + 제목 탭
+    d.rounded_rectangle([x0, y0, x1, y1], radius=mm(1.5), outline=_BORDER, width=mm(0.4))
+    tab_w = min(mm(21), avail // 3)
+    d.rounded_rectangle([x0, y0, x0 + tab_w, y0 + mm(5.2)], radius=mm(1.5), fill=_NAVY)
+    _centered_text(d, x0 + tab_w // 2, y0 + mm(2.6), "표기 요령", font(7.0, True), fill="white")
+
+    def guide_bubble(cx, kind):
+        cy = bubble_cy
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
+        inner = r - mm(0.5)
+        if kind == "full":
+            d.ellipse([cx - inner, cy - inner, cx + inner, cy + inner], fill=_INK)
+        elif kind == "half":          # 덜 칠함
+            d.pieslice([cx - inner, cy - inner, cx + inner, cy + inner], 90, 270, fill=_INK)
+        elif kind == "dot":           # 점만 찍음
+            dr = mm(0.8)
+            d.ellipse([cx - dr, cy - dr, cx + dr, cy + dr], fill=_INK)
+        elif kind == "check":         # ✓ 표시
+            w = mm(0.5)
+            d.line([cx - inner, cy, cx - mm(0.3), cy + inner], fill=_INK, width=w)
+            d.line([cx - mm(0.3), cy + inner, cx + inner, cy - inner], fill=_INK, width=w)
+        else:                         # 숫자만 있는 빈 버블
+            _centered_text(d, cx, cy, kind, font(6.2), fill=_PINK_TEXT)
+
+    extra = (avail - total) // (len(sections) + 1)
+    x = x0 + pad + extra
+    for i, ((title, spec, pitch), sw) in enumerate(zip(sections, widths)):
+        center = x + sw // 2
+        _centered_text(d, center, caption_cy, title, label_font, fill=_NAVY)
+        bw = section_width(spec, pitch)
+        bx = center - bw // 2 + r
+        for j, kind in enumerate(spec):
+            guide_bubble(int(bx + j * mm(pitch)), kind)
+        x += sw + pad + extra
+        if i < len(sections) - 1:
+            dx = int(x - (pad + extra) / 2)
+            d.line([dx, y0 + mm(6.5), dx, y1 - mm(2.0)], fill=_BORDER, width=mm(0.3))
 
 
 def render_sheet_image(layout: Layout, dpi: int = 200, student=None,

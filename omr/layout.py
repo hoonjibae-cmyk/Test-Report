@@ -39,15 +39,22 @@ class SheetConfig:
     essay_count: int = 0          # 서술형(주관식) 문항 수 — 객관식 뒤 번호로 손기입 칸 제공
 
 
+# 버블 좌표 계산식이 바뀔 때마다 올린다. 설정이 같아도 배치가 달라지므로,
+# 예전 판으로 출력한 답안지를 새 템플릿으로 읽으면 어긋난다 — 지문에 포함해 걸러낸다.
+LAYOUT_VERSION = 2
+
+
 def layout_fingerprint(config: "SheetConfig") -> str:
     """답안지의 물리적 배치를 결정하는 값들의 지문(8자).
 
     같은 지문이면 시험이 달라도 버블 좌표가 동일해 서로 판독이 호환된다.
-    반대로 시험이 같아도 지문이 다르면(설정 변경 후 재출력) 호환되지 않는다.
+    반대로 시험이 같아도 지문이 다르면(설정 변경 후 재출력, 또는 배치식 개정)
+    호환되지 않는다.
     """
     import hashlib
 
     parts = [
+        f"v{LAYOUT_VERSION}",
         str(config.num_questions),
         str(config.num_choices),
         str(config.id_digits),
@@ -306,10 +313,15 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     max_gutter = 16.0            # 열 사이 최대 여백(과도한 빈칸 방지)
     min_gutter = 6.0
 
-    # 서술형 영역은 오른쪽에 세로로 배치(폭 고정, 남는 공간을 활용).
+    # 서술형 영역은 오른쪽에 세로로 배치. 폭은 객관식 열이 먼저 자리를 잡고 남는 만큼
+    # 준다(과거에는 84mm 고정이라 3단 이상일 때 서술형 칸이 객관식 버블 위에 겹쳐 그려졌다).
     essay_count = max(0, int(config.essay_count or 0))
-    essay_w = 84.0 if essay_count else 0.0
     essay_gap = 8.0 if essay_count else 0.0
+    if essay_count:
+        min_obj_w = num_cols * (col_content_w + min_gutter) - min_gutter
+        essay_w = max(46.0, min(84.0, q_area_w - essay_gap - min_obj_w))
+    else:
+        essay_w = 0.0
     obj_avail = q_area_w - (essay_gap + essay_w)
 
     # 객관식 열 간격: 남는 폭에 맞춰 벌리되, 과도한 빈칸이 생기지 않게 상한을 둔다.
@@ -351,7 +363,9 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     # --- 서술형(주관식) 손기입 칸: 오른쪽 세로 배치, 판독 대상 아님 ---
     essay_boxes = []
     if essay_count:
-        ex0 = q_area_right - essay_w
+        # 마지막 객관식 열의 오른쪽 끝을 실제로 계산해, 서술형 칸이 그 위에 겹치지 않게 한다.
+        obj_right = q_area_left + (num_cols - 1) * col_pitch + col_content_w
+        ex0 = max(obj_right + essay_gap, q_area_right - essay_w)
         ex1 = q_area_right
         etop = q_top - 6            # 객관식 헤더와 상단 정렬
         ebottom = q_bottom_limit + 4    # 로고가 상단으로 이동해 하단 전체 사용

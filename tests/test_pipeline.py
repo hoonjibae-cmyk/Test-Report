@@ -193,8 +193,51 @@ def test_ambiguous_flagged_not_scored():
     assert rr.questions[1].status == "multiple"
     assert rr.questions[2].status == "blank"
     assert rr.questions[3].status == "ok" and rr.questions[3].chosen == 3
-    assert rr.answers()[1] is None      # 이중마킹은 채점되지 않음
+    assert rr.answers()[1] is None      # 단일 선택 기준으로는 채점되지 않음
     assert rr.answers()[2] is None
+    # '모두 고르기' 문항 대응: 칠해진 보기를 전부 돌려준다(1-base).
+    assert rr.selections()[1] == [1, 3]
+    assert rr.selections()[2] == []
+    assert rr.selections()[3] == [4]
+    flag = next(f for f in rr.review_flags if f.get("type") == "question" and f["no"] == 1)
+    assert flag["selected"] == [1, 3]
+
+
+def test_multi_select_many_choices():
+    """세 개를 칠한 '모두 고르기' 문항도 전부 읽어야 한다."""
+    d = _tmp()
+    cfg = SheetConfig(exam_id="T9", num_questions=8, num_choices=5, id_digits=4)
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    layout = build_layout(cfg)
+    import numpy as np
+
+    img = cv2.cvtColor(np.array(render_image(layout, dpi=200)), cv2.COLOR_RGB2BGR)
+    mm2px = lambda v: int(round(v / 25.4 * 200))  # noqa: E731
+    r = int(mm2px(layout.bubble_radius_mm) * 0.8)
+    bub = {(b.role, b.index, b.value): b for b in layout.bubbles}
+    for value in (0, 2, 4):
+        b = bub[("question", 2, value)]
+        cv2.circle(img, (mm2px(b.x_mm), mm2px(b.y_mm)), r, (35, 35, 35), -1)
+    p = os.path.join(d, "multi.png")
+    cv2.imwrite(p, img)
+
+    rr = read_omr(p, res["template"], params=ReadParams())
+    assert rr.selections()[2] == [1, 3, 5]
+    assert rr.questions[2].status == "multiple"
+
+
+def test_essay_panel_does_not_overlap_bubbles():
+    """서술형 손기입 칸이 객관식 버블 위에 겹치면 판독이 깨진다 — 항상 오른쪽에 비켜 있어야."""
+    for n, per_col, essays in ((45, 20, 5), (45, 15, 5), (40, 20, 5), (60, 20, 3)):
+        cfg = SheetConfig(exam_id="T", num_questions=n, num_choices=5, id_digits=5,
+                          questions_per_column=per_col, style="exam", essay_count=essays)
+        layout = build_layout(cfg)
+        obj_right = max(b.x_mm for b in layout.bubbles if b.role == "question")
+        obj_right += layout.bubble_radius_mm
+        assert layout.essay_boxes_mm, f"{n}/{per_col}: 서술형 칸이 없음"
+        assert layout.essay_boxes_mm[0]["x0"] > obj_right, (
+            f"{n}문항/{per_col}단: 서술형 칸이 객관식 버블과 겹칩니다."
+        )
 
 
 def test_web_reports_and_manifest():
