@@ -46,6 +46,8 @@ class GroupResult:
 @dataclass
 class ReadResult:
     exam_id: str | None
+    # 답안지 QR에 새겨진 레이아웃 지문(구버전 답안지는 None)
+    layout_fingerprint: str | None
     student_id_qr: str | None
     student_id_bubbles: str | None
     questions: dict          # {q_no: GroupResult}
@@ -152,11 +154,15 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     # QR (원본에서)
     exam_id = None
     student_id_qr = None
+    qr_fingerprint = None
     try:
         data, _, _ = cv2.QRCodeDetector().detectAndDecode(gray)
         if data and "|" in data:
-            exam_id, sid = data.split("|", 1)
-            student_id_qr = sid or None
+            # "시험ID|수험번호" 또는 "시험ID|수험번호|레이아웃지문"(신형)
+            parts = data.split("|")
+            exam_id = parts[0] or None
+            student_id_qr = (parts[1] if len(parts) > 1 else "") or None
+            qr_fingerprint = (parts[2] if len(parts) > 2 else "") or None
         elif data:
             exam_id = data
     except Exception:
@@ -216,6 +222,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
 
     return ReadResult(
         exam_id=exam_id or template.get("exam_id"),
+        layout_fingerprint=qr_fingerprint,
         student_id_qr=student_id_qr,
         student_id_bubbles=student_id_bubbles,
         questions=questions,

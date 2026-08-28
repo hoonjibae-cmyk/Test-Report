@@ -26,7 +26,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as rl_canvas
 
 from .fonts import find_font
-from .layout import Layout, SheetConfig, MARKER_DICT, MARKER_IDS, build_layout
+from .layout import Layout, SheetConfig, MARKER_DICT, MARKER_IDS, build_layout, layout_fingerprint
 
 
 # ----------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
     # QR
     exam_id = layout.config.exam_id
     sid = student["id"] if student else ""
-    qr_img = ImageReader(make_qr_image(f"{exam_id}|{sid}"))
+    qr_img = ImageReader(make_qr_image(f"{exam_id}|{sid}|{layout_fingerprint(layout.config)}"))
     qx, qy = layout.qr_xy_mm
     qs = layout.qr_size_mm
     c.drawImage(qr_img, X(qx), Y(qy + qs), width=qs * MM, height=qs * MM)
@@ -170,7 +170,9 @@ def render_image(layout: Layout, dpi: int = 200, student=None, font_path: str | 
     exam_id = layout.config.exam_id
     sid = student["id"] if student else ""
     qs = layout.qr_size_mm
-    q = make_qr_image(f"{exam_id}|{sid}").resize((mm2px(qs), mm2px(qs)), Image.NEAREST).convert("RGB")
+    q = make_qr_image(f"{exam_id}|{sid}|{layout_fingerprint(layout.config)}").resize(
+        (mm2px(qs), mm2px(qs)), Image.NEAREST
+    ).convert("RGB")
     qx, qy = layout.qr_xy_mm
     img.paste(q, (mm2px(qx), mm2px(qy)))
 
@@ -281,7 +283,9 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     exam_id = cfg.exam_id
     sid = student["id"] if student else ""
     qs = layout.qr_size_mm
-    q = make_qr_image(f"{exam_id}|{sid}").resize((mm(qs), mm(qs)), Image.NEAREST).convert("RGB")
+    q = make_qr_image(f"{exam_id}|{sid}|{layout_fingerprint(cfg)}").resize(
+        (mm(qs), mm(qs)), Image.NEAREST
+    ).convert("RGB")
     qx, qy = layout.qr_xy_mm
     img.paste(q, (mm(qx), mm(qy)))
 

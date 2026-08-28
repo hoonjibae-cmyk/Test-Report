@@ -39,6 +39,26 @@ class SheetConfig:
     essay_count: int = 0          # 서술형(주관식) 문항 수 — 객관식 뒤 번호로 손기입 칸 제공
 
 
+def layout_fingerprint(config: "SheetConfig") -> str:
+    """답안지의 물리적 배치를 결정하는 값들의 지문(8자).
+
+    같은 지문이면 시험이 달라도 버블 좌표가 동일해 서로 판독이 호환된다.
+    반대로 시험이 같아도 지문이 다르면(설정 변경 후 재출력) 호환되지 않는다.
+    """
+    import hashlib
+
+    parts = [
+        str(config.num_questions),
+        str(config.num_choices),
+        str(config.id_digits),
+        str(config.questions_per_column),
+        str(config.style),
+        str(max(0, int(config.essay_count or 0))),
+    ]
+    raw = "|".join(parts).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:8]
+
+
 @dataclass
 class Bubble:
     """단일 마킹 버블. 위치는 mm와 정규화(u, v) 좌표를 함께 보유."""
@@ -86,6 +106,7 @@ class Layout:
         """판독기가 사용할 템플릿(JSON 직렬화용)."""
         return {
             "exam_id": self.config.exam_id,
+            "layout_fingerprint": layout_fingerprint(self.config),
             "title": self.config.title,
             "num_questions": self.config.num_questions,
             "num_choices": self.config.num_choices,

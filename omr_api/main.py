@@ -171,6 +171,9 @@ async def read_scans(
                     "student_id_qr": r.student_id_qr,
                     "student_id_bubbles": r.student_id_bubbles,
                     "exam_id": r.exam_id,
+                    # 답안지 QR의 레이아웃 지문 vs 이번 판독에 쓴 설정의 지문
+                    "sheet_layout": r.layout_fingerprint,
+                    "expected_layout": json.loads(template).get("layout_fingerprint"),
                     "answers": {str(q): v for q, v in r.answers().items()},
                     "review_flags": r.review_flags,
                 })
