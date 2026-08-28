@@ -60,7 +60,18 @@ class SheetSpec(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "omr-api", "auth": bool(API_KEY)}
+    try:
+        import pymupdf  # noqa: F401
+        pdf_ok = True
+    except Exception:
+        pdf_ok = False
+    return {
+        "ok": True,
+        "service": "omr-api",
+        "auth": bool(API_KEY),
+        "version": "2026-08-28.1",
+        "pdf": pdf_ok,
+    }
 
 
 @app.post("/generate")
