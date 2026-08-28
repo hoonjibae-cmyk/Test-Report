@@ -219,6 +219,7 @@ def _right_text(draw, rx, cy, text, font, fill="black"):
 _BG = (255, 255, 255)      # 배경 흰색
 _NAVY = (24, 60, 115)
 _PINK = (206, 118, 138)
+_PINK_TEXT = (146, 58, 80)   # 버블 안 숫자 — 흑백/저품질 인쇄에서도 보이도록 외곽선보다 진하게
 _BAND = (238, 241, 246)    # 5행 그룹 음영(연한 회청)
 _BORDER = (176, 184, 196)
 _INK = (45, 47, 55)
@@ -373,13 +374,13 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                     outline=_BORDER, width=mm(0.4))
     # 0~9 버블 (흰 내부 + 분홍 외곽 + 숫자)
     r = mm(layout.bubble_radius_mm)
-    bf = font(6.3)
+    bf = font(6.8)
     for b in layout.bubbles:
         if b.role != "id":
             continue
         cx, cy = mm(b.x_mm), mm(b.y_mm)
         d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
-        _centered_text(d, cx, cy, str(b.value), bf, fill=_PINK)
+        _centered_text(d, cx, cy, str(b.value), bf, fill=_PINK_TEXT)
 
     # --- 감독관 확인 ---
     gv_y0 = box_y1 + mm(4)
@@ -397,7 +398,7 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
 
     cpitch = layout.q_choice_pitch_mm
     rpitch = layout.q_row_pitch_mm
-    cf = font(6.3)
+    cf = font(6.8)
     header_y = mm(mt + 24)   # 첫 문항행(mt+37)과 충분히 이격
     for col_i, qmap in sorted(qbycol.items()):
         qnos = sorted(qmap)
@@ -429,7 +430,7 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
             for b in bl:
                 cx, cy = mm(b.x_mm), mm(b.y_mm)
                 d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
-                _centered_text(d, cx, cy, str(b.value + 1), cf, fill=_PINK)
+                _centered_text(d, cx, cy, str(b.value + 1), cf, fill=_PINK_TEXT)
         # 열 외곽선
         d.rectangle([mm(col_left), header_y, mm(col_right),
                      mm(sorted(qmap[qnos[-1]], key=lambda b: b.value)[0].y_mm + rpitch / 2)],

@@ -129,21 +129,56 @@ async def read_scans(
         for f in files:
             if not f.filename:
                 continue
-            img_path = os.path.join(d, os.path.basename(f.filename))
-            with open(img_path, "wb") as out:
+            raw_path = os.path.join(d, os.path.basename(f.filename))
+            with open(raw_path, "wb") as out:
                 out.write(await f.read())
-            try:
-                r = read_omr(img_path, tpl_path, params=params)
-            except Exception as e:
-                problems.append({"filename": f.filename, "error": str(e)})
-                continue
-            results.append({
-                "filename": f.filename,
-                "student_id": r.resolved_student_id(),
-                "student_id_qr": r.student_id_qr,
-                "student_id_bubbles": r.student_id_bubbles,
-                "exam_id": r.exam_id,
-                "answers": {str(q): v for q, v in r.answers().items()},
-                "review_flags": r.review_flags,
-            })
+
+            # PDF는 페이지별 이미지로 풀어 각 페이지를 답안지 1장으로 판독한다.
+            # 페이지 파일명은 "원본.pdf#p1" 형식 — 호출 측이 원본과 매핑할 수 있다.
+            if f.filename.lower().endswith(".pdf"):
+                try:
+                    pages = _expand_pdf_pages(raw_path, d)
+                except Exception as e:
+                    problems.append({"filename": f.filename, "error": f"PDF를 열지 못했습니다: {e}"})
+                    continue
+                if not pages:
+                    problems.append({"filename": f.filename, "error": "PDF에 페이지가 없습니다."})
+                    continue
+                targets = [(f"{f.filename}#p{i + 1}", p) for i, (_, p) in enumerate(pages)]
+            else:
+                targets = [(f.filename, raw_path)]
+
+            for name, img_path in targets:
+                try:
+                    r = read_omr(img_path, tpl_path, params=params)
+                except Exception as e:
+                    problems.append({"filename": name, "error": str(e)})
+                    continue
+                results.append({
+                    "filename": name,
+                    "student_id": r.resolved_student_id(),
+                    "student_id_qr": r.student_id_qr,
+                    "student_id_bubbles": r.student_id_bubbles,
+                    "exam_id": r.exam_id,
+                    "answers": {str(q): v for q, v in r.answers().items()},
+                    "review_flags": r.review_flags,
+                })
     return {"results": results, "problems": problems}
+
+
+def _expand_pdf_pages(pdf_path: str, out_dir: str, dpi: int = 200, max_pages: int = 100):
+    """PDF의 각 페이지를 판독용 PNG로 렌더링해 (페이지번호, 경로) 목록을 반환."""
+    import pymupdf
+
+    pages = []
+    with pymupdf.open(pdf_path) as doc:
+        count = min(doc.page_count, max_pages)
+        zoom = dpi / 72.0
+        matrix = pymupdf.Matrix(zoom, zoom)
+        base = os.path.splitext(os.path.basename(pdf_path))[0]
+        for i in range(count):
+            pix = doc[i].get_pixmap(matrix=matrix, colorspace=pymupdf.csRGB)
+            page_path = os.path.join(out_dir, f"{base}__page{i + 1}.png")
+            pix.save(page_path)
+            pages.append((i + 1, page_path))
+    return pages
