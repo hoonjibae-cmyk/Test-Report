@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 from dataclasses import dataclass, field
 
 import cv2
@@ -36,6 +37,7 @@ class ReadParams:
     # 마킹은 0.86 언저리에 몰린다. 그래서 '확실한 빈칸' 선을 노이즈 바닥보다
     # 위(0.30×0.85≈0.26)에 두어, 노이즈를 애매한 표기로 오해하지 않게 한다.
     blank_margin: float = 0.85       # 1순위 < mark_abs_min×이 값 → 확실한 미표기
+    blank_spread: float = 1.8        # 1순위 ≤ 무리 중앙값×이 값 → 튀는 것이 없으니 미표기
     mark_margin: float = 1.35        # 1순위 ≥ mark_abs_min×이 값 → 확실한 표기
     ratio_margin: float = 0.75       # 2순위/1순위 ≤ ambiguous_ratio×이 값 → 확실한 단독
 
@@ -239,8 +241,22 @@ def _judge_group(fills: dict, params: ReadParams):
     second_f = ordered[1][1] if len(ordered) > 1 else 0.0
 
     if best_f < params.mark_abs_min:
-        # 확실한 미표기 = 가장 진한 것조차 임계에 한참 못 미침(빈칸으로 봐도 무방)
-        return None, "blank", [], best_f < params.mark_abs_min * params.blank_margin
+        # 미표기다. 남은 문제는 '확실한가' — 아무것도 안 칠한 것과, 연필이 흐려
+        # 임계를 못 넘긴 것을 갈라야 사람이 볼 것만 골라낼 수 있다.
+        #
+        # 절대값만으로는 갈리지 않는다. 종이 질감·스캐너 노출·버블 안에 인쇄된
+        # 숫자 때문에 빈 칸의 채움률도 0.25 언저리까지 올라가는 스캔이 있고,
+        # 그러면 멀쩡한 빈 칸이 물음표가 된다.
+        #
+        # 흐린 자국은 **무리 안에서 튄다.** 실측하면 이렇게 갈린다.
+        #   완전히 빈 자리      최대÷중앙  1.1~1.4배
+        #   가장 흐린 연필 자국 최대÷중앙  2.3배 이상
+        # 그래서 절대값이 낮거나, 낮지 않아도 무리 안에서 튀지 않으면 빈칸으로
+        # 확신한다. 둘 다 아니면 사람에게 넘긴다.
+        typical = statistics.median(fills.values())
+        certain = (best_f < params.mark_abs_min * params.blank_margin
+                   or best_f <= typical * params.blank_spread)
+        return None, "blank", [], certain
 
     selected = [best_v]
     for value, fill in ordered[1:]:

@@ -679,6 +679,50 @@ def test_faint_id_digit_does_not_silently_shorten_the_number():
     )
 
 
+def test_blank_last_id_column_is_trimmed_even_on_a_noisy_scan():
+    """수험번호가 4자리면 5번째 자리는 비운다 — 그 빈 자리가 물음표가 되면 안 된다.
+
+    실제 스캔에서 `1654?` 가 나왔다. 학생은 5번째 자리를 비웠는데 판독기가
+    "읽지 못한 자리"로 넘긴 것이다. 원인은 빈칸 확신을 **절대 채움률 하나로만**
+    따진 것이었다. 종이 질감·스캐너 노출·버블 안에 인쇄된 숫자 때문에 빈 칸도
+    0.25 언저리까지 올라가는 스캔이 있고, 그러면 멀쩡한 빈칸이 걸린다.
+
+    갈라내는 단서는 절대값이 아니라 **무리 안에서 튀는가**다(실측: 빈 자리
+    1.1~1.4배, 가장 흐린 자국도 2.3배 이상). 여기서는 무리 전체를 고르게
+    어둡게 만들어 그 상황을 재현한다.
+    """
+    import numpy as np
+
+    d = _tmp()
+    cfg = SheetConfig(exam_id="NB", num_questions=8, num_choices=5, id_digits=5)
+    res = generate(cfg, d, dpi=200, make_preview=False)
+    layout = build_layout(cfg)
+    dpi = 200
+    mm2px = lambda mm: int(round(mm / 25.4 * dpi))
+
+    pil = render_image(layout, dpi=dpi)
+    img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+    for col, digit in enumerate("1654"):
+        _mark(img, layout, mm2px, "id", col, int(digit), 20)
+    # 5번째 자리는 비운 채, 그 무리 전체를 고르게 흐리게 만든다(종이·인쇄 잡음).
+    # 밝기 175는 실측으로 고른 값이다 — 이때 가장 진한 칸이 0.276이 되어
+    # '마킹(0.300)'과 '확실한 빈칸(0.255)' 사이, 즉 물음표가 나던 구간에 정확히
+    # 들어간다. 대신 무리 전체가 고르므로 최대÷중앙은 1.5배에 머문다.
+    for value in range(10):
+        _mark(img, layout, mm2px, "id", 4, value, 175, scale=0.95)
+
+    path = os.path.join(d, "noisy.png")
+    cv2.imwrite(path, img)
+    rr = read_omr(path, res["template"], params=ReadParams())
+
+    assert rr.student_id_bubbles == "1654", (
+        f"빈 5번째 자리가 잘리지 않았다: {rr.student_id_bubbles!r}"
+    )
+    assert not [f for f in rr.review_flags if f.get("type") == "id"], (
+        "고르게 빈 자리는 검수로 넘길 이유가 없다"
+    )
+
+
 def test_essay_boxes_reach_the_reader():
     """주관식 칸 좌표가 판독 템플릿에 실려야 전사를 위해 잘라낼 수 있다.
 

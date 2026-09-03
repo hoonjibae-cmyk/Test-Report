@@ -69,7 +69,7 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-08-29.3",
+        "version": "2026-09-03.1",
         "pdf": pdf_ok,
     }
 
