@@ -350,8 +350,23 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         "※ 수험번호는 왼쪽부터 채워 표기(4~5자리).",
         "※ 한 문항에 하나만 표기 — ‘모두 고르기’ 문항은 예외.",
     ]
+    # 서술형 답란은 그 칸만 잘라 내 읽는다. 칸 밖으로 나간 글씨는 잘려 나가
+    # 채점자에게 보이지 않으므로, 쓰기 전에 알려 준다.
+    #
+    # 문구를 짧게 쓴 것은 멋을 부린 게 아니다. 이 안내문의 오른쪽 끝이 '표기
+    # 요령' 상자가 들어갈 자리를 정한다 — 한 줄이 길면 그 상자가 통째로 밀려
+    # 사라진다.
+    if getattr(layout, "essay_boxes_mm", None):
+        ins_lines.append("※ 서술형은 칸 안에 쓰십시오(칸 밖은 채점 불가).")
+    # 줄이 하나 늘어도 아래 문항 열 헤더(mt+24)를 침범하지 않게 위로 당기고
+    # 간격을 좁힌다.
+    if len(ins_lines) > 3:
+        ins_y = mm(mt + 5.5)
+        ins_step = mm(4.2)
+    else:
+        ins_step = mm(5.0)
     for i, line in enumerate(ins_lines):
-        d.text((ins_x, ins_y + mm(5.0) * i), line, font=ins_font, fill=_INK)
+        d.text((ins_x, ins_y + ins_step * i), line, font=ins_font, fill=_INK)
     ins_right = ins_x + max(int(d.textlength(line, font=ins_font)) for line in ins_lines)
 
     # --- 표기 요령 (안내문과 로고 사이의 빈 여백) ---

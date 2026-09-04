@@ -25,6 +25,7 @@ MIN_ROW_PITCH_MM = 6.5      # 문항 행 간격 하한 — 이보다 좁으면 �
 MIN_CHOICE_PITCH_MM = 5.8   # 보기 버블 간격 하한(지름 5mm + 여백 0.8mm)
 ESSAY_PREF_MIN_MM = 46.0    # 서술형 칸 선호 최소 폭
 ESSAY_HARD_MIN_MM = 34.0    # 이보다 좁아지면 객관식 열 수를 줄인다
+ESSAY_MAX_MM = 130.0        # 상한 — 객관식이 적을 때 남는 폭을 서술형이 가져간다
 
 
 @dataclass
@@ -336,7 +337,14 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     num_cols = (n + per_col - 1) // per_col
     q_area_left = max(m_left + 78, panel_right + 14)  # 좌측 패널 우변과 연동(겹침 방지)
     q_area_right = m_right - 4
-    q_area_w = q_area_right - q_area_left
+    essay_count = max(0, int(config.essay_count or 0))
+    # 서술형 칸의 오른쪽 끝은 **마커 열 왼쪽**에서 멈춘다. 마커를 비켜 두어야
+    # 마지막 칸을 종이 아래끝까지 늘릴 수 있고, 테두리가 마커에 얹혀 판독이
+    # 흔들릴 일도 없다. 폭을 나눠 줄 때부터 이 값을 써야 나중 배치와 어긋나지
+    # 않는다(예전에는 여기만 q_area_right로 계산해 폭이 모자라는 시험이 생겼다).
+    essay_right = min(q_area_right, m_right - marker_size / 2 - 4.0)
+    usable_right = essay_right if essay_count else q_area_right
+    q_area_w = usable_right - q_area_left
     choice_pitch = 6.6
     label_gap = 13.0
 
@@ -345,7 +353,6 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     max_gutter = 16.0            # 열 사이 최대 여백(과도한 빈칸 방지)
     min_gutter = 6.0
 
-    essay_count = max(0, int(config.essay_count or 0))
     essay_gap = 8.0 if essay_count else 0.0
 
     # 문항 행이 세로로 들어갈 수 있는 최대 개수(행 간격 하한 기준)
@@ -419,7 +426,7 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     # 준다(과거에는 84mm 고정이라 3단 이상일 때 서술형 칸이 객관식 버블 위에 겹쳐 그려졌다).
     if essay_count:
         min_obj_w = num_cols * (col_content_w + min_gutter) - min_gutter
-        essay_w = max(ESSAY_PREF_MIN_MM, min(84.0, q_area_w - essay_gap - min_obj_w))
+        essay_w = max(ESSAY_PREF_MIN_MM, min(ESSAY_MAX_MM, q_area_w - essay_gap - min_obj_w))
     else:
         essay_w = 0.0
     obj_avail = q_area_w - (essay_gap + essay_w)
@@ -463,17 +470,27 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     if essay_count:
         # 마지막 객관식 열의 오른쪽 끝을 실제로 계산해, 서술형 칸이 그 위에 겹치지 않게 한다.
         obj_right = q_area_left + (num_cols - 1) * col_pitch + col_content_w
-        ex0 = max(obj_right + essay_gap, q_area_right - essay_w)
-        ex1 = q_area_right
-        # 위의 열 수 조정으로 여기까지 오면 안 되지만, 좌표가 뒤집힌 채 렌더러로
-        # 넘어가면 PIL이 예외로 죽으므로 읽을 수 있는 메시지로 막는다.
+        ex1 = essay_right
+        ex0 = max(obj_right + essay_gap, ex1 - essay_w)
+        # 마커 열을 비켜 두는 것은 '넉넉할 때' 누리는 것이다. 문항이 많고
+        # 수험번호가 길어 빠듯한 시험에서는 그럴 형편이 안 된다. 그때는 예전처럼
+        # 마커 안쪽까지 쓰되, 대신 아래는 마커 위에서 멈춘다 — 답안지를 아예
+        # 만들지 못하는 것보다 낫다.
+        bottom_free = True
+        if ex1 - ex0 < ESSAY_HARD_MIN_MM:
+            ex1 = q_area_right
+            ex0 = max(obj_right + essay_gap, ex1 - essay_w)
+            bottom_free = False
+        # 여기까지 와도 모자라면 좌표가 뒤집힌 채 렌더러로 넘어가 PIL이 예외로
+        # 죽는다. 읽을 수 있는 메시지로 막는다.
         if ex1 - ex0 < ESSAY_HARD_MIN_MM:
             raise ValueError(
                 f"객관식 {n}문항과 서술형 {essay_count}문항을 함께 배치할 폭이 부족합니다. "
                 "한 열에 담는 문항 수를 늘리거나, 문항 수를 줄여 주세요."
             )
         etop = q_top - 6            # 객관식 헤더와 상단 정렬
-        ebottom = q_bottom_limit + 4    # 로고가 상단으로 이동해 하단 전체 사용
+        # 마커 열을 비켜 두었다면 아래는 종이 여백까지 쓸 수 있다.
+        ebottom = (page_h - margin - 3.0) if bottom_free else (q_bottom_limit + 4)
         slot_h = (ebottom - etop) / essay_count
         box_gap = 3.0
         for k in range(essay_count):
