@@ -48,7 +48,7 @@ class SheetConfig:
 
 # 버블 좌표 계산식이 바뀔 때마다 올린다. 설정이 같아도 배치가 달라지므로,
 # 예전 판으로 출력한 답안지를 새 템플릿으로 읽으면 어긋난다 — 지문에 포함해 걸러낸다.
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 
 
 def layout_fingerprint(config: "SheetConfig") -> str:
@@ -335,7 +335,10 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     n = config.num_questions
     per_col = config.questions_per_column or 20
     num_cols = (n + per_col - 1) // per_col
-    q_area_left = max(m_left + 78, panel_right + 14)  # 좌측 패널 우변과 연동(겹침 방지)
+    # 좌측 패널 우변에서 일정 간격만 띄운다. 예전에는 여기에 m_left+78 이라는
+    # 고정 하한이 있었는데, 그 값은 패널 폭과 무관해서 수험번호가 짧으면(5자리)
+    # 12mm가 그냥 버려졌다. 그 자리는 서술형 칸이 가져간다.
+    q_area_left = panel_right + 12.0
     q_area_right = m_right - 4
     essay_count = max(0, int(config.essay_count or 0))
     # 서술형 칸의 오른쪽 끝은 **마커 열 왼쪽**에서 멈춘다. 마커를 비켜 두어야
@@ -391,7 +394,7 @@ def build_exam_layout(config: SheetConfig) -> Layout:
 
     # ② 좌측 인적사항 패널과의 여백을 줄여 가로 폭을 더 확보한다
     if num_cols > max_cols:
-        narrowed = max(m_left + 78, panel_right + 8.0)
+        narrowed = panel_right + 8.0
         if narrowed < q_area_left:
             q_area_left = narrowed
             q_area_w = q_area_right - q_area_left
