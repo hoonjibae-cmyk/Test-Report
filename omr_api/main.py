@@ -12,11 +12,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import tempfile
 
+import anyio
 from fastapi import FastAPI, Form, File, UploadFile, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -40,6 +42,22 @@ app.add_middleware(
 def _check_key(x_api_key: str | None):
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+
+
+# 한 번에 판독할 요청 수. 1을 기본으로 둔 것은 의도한 것이다.
+#
+# 판독은 CPU와 메모리를 함께 먹는다. 300dpi 스캔 한 장이 250MB 넘게 쓰므로,
+# 두 요청을 같이 돌리면 작은 요금제(512MB)에서는 프로세스가 통째로 죽는다.
+# CPU도 요금제에 걸린 만큼만 나눠 쓰는 것이라, 같이 돌린다고 총 처리량이
+# 늘지도 않는다. 여러 선생님이 동시에 올려도 요청 단위로 번갈아 처리된다.
+#
+# 서버를 키운 뒤에는 OMR_MAX_CONCURRENCY 로 올릴 수 있다.
+try:
+    MAX_CONCURRENCY = max(1, int(os.environ.get("OMR_MAX_CONCURRENCY", "1")))
+except ValueError:
+    MAX_CONCURRENCY = 1
+
+_read_slots = asyncio.Semaphore(MAX_CONCURRENCY)
 
 
 class SheetSpec(BaseModel):
@@ -69,8 +87,9 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-09-04.2",
+        "version": "2026-09-07.1",
         "pdf": pdf_ok,
+        "max_concurrency": MAX_CONCURRENCY,
     }
 
 
@@ -143,74 +162,100 @@ async def read_scans(
             raise HTTPException(status_code=422, detail=str(e))
 
     params = ReadParams(mark_abs_min=threshold)
-    results, problems = [], []
     with tempfile.TemporaryDirectory() as d:
         tpl_path = os.path.join(d, "template.json")
         with open(tpl_path, "w", encoding="utf-8") as fp:
             fp.write(template)
+
+        # 업로드를 먼저 디스크로 내린다. 통째로 메모리에 올리면 60쪽짜리 PDF
+        # 하나에 수십 MB가 잡혀, 판독에 써야 할 몫을 미리 깎아먹는다.
+        saved: list[tuple[str, str]] = []
         for f in files:
             if not f.filename:
                 continue
             raw_path = os.path.join(d, os.path.basename(f.filename))
             with open(raw_path, "wb") as out:
-                out.write(await f.read())
+                while chunk := await f.read(1024 * 1024):
+                    out.write(chunk)
+            saved.append((f.filename, raw_path))
 
-            # PDF는 페이지별 이미지로 풀어 각 페이지를 답안지 1장으로 판독한다.
-            # 페이지 파일명은 "원본.pdf#p1" 형식 — 호출 측이 원본과 매핑할 수 있다.
-            if f.filename.lower().endswith(".pdf"):
-                try:
-                    pages = _expand_pdf_pages(raw_path, d)
-                except Exception as e:
-                    problems.append({"filename": f.filename, "error": f"PDF를 열지 못했습니다: {e}"})
-                    continue
-                if not pages:
-                    problems.append({"filename": f.filename, "error": "PDF에 페이지가 없습니다."})
-                    continue
-                targets = [(f"{f.filename}#p{i + 1}", p) for i, (_, p) in enumerate(pages)]
-            else:
-                targets = [(f.filename, raw_path)]
-
-            for name, img_path in targets:
-                try:
-                    r = read_omr(img_path, tpl_path, params=params,
-                                 make_preview=include_preview,
-                                 make_essay_crops=include_essay_crops)
-                except Exception as e:
-                    problems.append({"filename": name, "error": str(e)})
-                    continue
-                results.append({
-                    "filename": name,
-                    "student_id": r.resolved_student_id(),
-                    "student_id_qr": r.student_id_qr,
-                    "student_id_bubbles": r.student_id_bubbles,
-                    "exam_id": r.exam_id,
-                    # 답안지 QR의 레이아웃 지문 vs 이번 판독에 쓴 설정의 지문
-                    "sheet_layout": r.layout_fingerprint,
-                    "expected_layout": json.loads(template).get("layout_fingerprint"),
-                    "answers": {str(q): v for q, v in r.answers().items()},
-                    # '모두 고르기' 문항 대응: 칠해진 보기를 전부 담는다.
-                    "selections": {str(q): v for q, v in r.selections().items()},
-                    "review_flags": r.review_flags,
-                    # 자동 검수 통과 판단용 — 경계에 걸친 것만 추린다.
-                    # (확실한 미표기는 여기 들어가지 않는다: 학생이 안 푼 문항이다)
-                    "uncertain_questions": r.uncertain_questions(),
-                    "multi_marked_questions": r.multi_marked_questions(),
-                    "id_uncertain": any(
-                        f.get("type") == "id" for f in r.review_flags
-                    ),
-                    "id_conflict": r.id_conflict(),
-                })
-                if include_preview and r.preview_jpeg:
-                    # 판독기가 실제로 본 이미지(원근 보정 + 판정 표시)
-                    results[-1]["preview_jpeg_base64"] = base64.b64encode(
-                        r.preview_jpeg).decode("ascii")
-                if include_essay_crops and r.essay_crops:
-                    # 주관식 손기입 칸을 반듯하게 편 이미지 — 전사(글자 읽기)에 쓴다
-                    results[-1]["essay_crops_base64"] = {
-                        str(num): base64.b64encode(jpg).decode("ascii")
-                        for num, jpg in r.essay_crops.items()
-                    }
+        # 판독은 CPU를 오래 붙잡는 작업이라 이벤트 루프에서 돌리면 안 된다.
+        # 그 사이 서버는 /health 에도 답하지 못하고, 배포 플랫폼은 그것을
+        # '죽은 서버'로 읽어 판독 도중에 인스턴스를 재시작해 버린다.
+        async with _read_slots:
+            results, problems = await anyio.to_thread.run_sync(
+                _read_all, saved, d, tpl_path, params,
+                include_preview, include_essay_crops, template,
+            )
     return {"results": results, "problems": problems}
+
+
+def _read_all(saved, work_dir, tpl_path, params, include_preview,
+              include_essay_crops, template):
+    """올려받은 파일들을 차례로 판독한다.
+
+    작업 스레드에서 돌린다. 이벤트 루프를 붙잡지 않는 것이 목적이므로,
+    여기서는 파일 읽기와 판독만 하고 네트워크는 건드리지 않는다.
+    """
+    expected_layout = json.loads(template).get("layout_fingerprint")
+    results, problems = [], []
+    for filename, raw_path in saved:
+        # PDF는 페이지별 이미지로 풀어 각 페이지를 답안지 1장으로 판독한다.
+        # 페이지 파일명은 "원본.pdf#p1" 형식 — 호출 측이 원본과 매핑할 수 있다.
+        if filename.lower().endswith(".pdf"):
+            try:
+                pages = _expand_pdf_pages(raw_path, work_dir)
+            except Exception as e:
+                problems.append({"filename": filename, "error": f"PDF를 열지 못했습니다: {e}"})
+                continue
+            if not pages:
+                problems.append({"filename": filename, "error": "PDF에 페이지가 없습니다."})
+                continue
+            targets = [(f"{filename}#p{i + 1}", p) for i, (_, p) in enumerate(pages)]
+        else:
+            targets = [(filename, raw_path)]
+
+        for name, img_path in targets:
+            try:
+                r = read_omr(img_path, tpl_path, params=params,
+                             make_preview=include_preview,
+                             make_essay_crops=include_essay_crops)
+            except Exception as e:
+                problems.append({"filename": name, "error": str(e)})
+                continue
+            results.append({
+                "filename": name,
+                "student_id": r.resolved_student_id(),
+                "student_id_qr": r.student_id_qr,
+                "student_id_bubbles": r.student_id_bubbles,
+                "exam_id": r.exam_id,
+                # 답안지 QR의 레이아웃 지문 vs 이번 판독에 쓴 설정의 지문
+                "sheet_layout": r.layout_fingerprint,
+                "expected_layout": expected_layout,
+                "answers": {str(q): v for q, v in r.answers().items()},
+                # '모두 고르기' 문항 대응: 칠해진 보기를 전부 담는다.
+                "selections": {str(q): v for q, v in r.selections().items()},
+                "review_flags": r.review_flags,
+                # 자동 검수 통과 판단용 — 경계에 걸친 것만 추린다.
+                # (확실한 미표기는 여기 들어가지 않는다: 학생이 안 푼 문항이다)
+                "uncertain_questions": r.uncertain_questions(),
+                "multi_marked_questions": r.multi_marked_questions(),
+                "id_uncertain": any(
+                    flag.get("type") == "id" for flag in r.review_flags
+                ),
+                "id_conflict": r.id_conflict(),
+            })
+            if include_preview and r.preview_jpeg:
+                # 판독기가 실제로 본 이미지(원근 보정 + 판정 표시)
+                results[-1]["preview_jpeg_base64"] = base64.b64encode(
+                    r.preview_jpeg).decode("ascii")
+            if include_essay_crops and r.essay_crops:
+                # 주관식 손기입 칸을 반듯하게 편 이미지 — 전사(글자 읽기)에 쓴다
+                results[-1]["essay_crops_base64"] = {
+                    str(num): base64.b64encode(jpg).decode("ascii")
+                    for num, jpg in r.essay_crops.items()
+                }
+    return results, problems
 
 
 def _expand_pdf_pages(pdf_path: str, out_dir: str, dpi: int = 200, max_pages: int = 100):
