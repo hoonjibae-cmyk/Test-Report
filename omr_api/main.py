@@ -14,17 +14,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import os
 import tempfile
 
 import anyio
+from fastapi.responses import Response
 from fastapi import FastAPI, Form, File, UploadFile, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from omr.layout import SheetConfig, build_layout
-from omr.generator import generate
+from omr.layout import build_exam_layout, build_layout, SheetConfig, build_layout
+from omr.generator import render_sheet_image, generate
 from omr.reader import read_omr, ReadParams
 
 API_KEY = os.environ.get("OMR_API_KEY", "")
@@ -87,11 +89,40 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-09-07.1",
+        "version": "2026-09-14.1",
         "pdf": pdf_ok,
         "max_concurrency": MAX_CONCURRENCY,
     }
 
+
+@app.post("/preview")
+def preview_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None)):
+    """설정만 보고 답안지 한 장을 PNG로 그려 돌려준다 — 시험을 만들기 전 미리보기.
+
+    /generate 와 같은 코드로 그린다. 미리보기가 실제 답안지와 조금이라도 다르면
+    미리보기가 없는 것보다 나쁘므로, 배치 코드는 한 곳(omr.layout)만 쓴다.
+    PDF 대신 낮은 해상도(기본 100dpi)의 PNG 한 장이라 0.1초쯤 걸린다.
+    """
+    _check_key(x_api_key)
+    cfg = SheetConfig(
+        exam_id="PREVIEW", title=spec.title, num_questions=spec.num_questions,
+        num_choices=spec.num_choices, id_digits=spec.id_digits,
+        questions_per_column=spec.per_column, style=spec.style,
+        period=spec.period, subject_label=spec.subject_label, academy=spec.academy,
+        essay_count=spec.essay_count,
+        academy_logo=LOGO if os.path.exists(LOGO) else "",
+    )
+    dpi = max(50, min(int(spec.dpi or 100), 150))
+    try:
+        layout = build_exam_layout(cfg) if cfg.style == "exam" else build_layout(cfg)
+        img = render_sheet_image(layout, dpi=dpi)
+    except ValueError as e:
+        # 설정이 종이에 안 맞는 경우 — 화면이 그대로 보여 줄 수 있는 안내문
+        raise HTTPException(status_code=422, detail=str(e))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return Response(content=buf.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 @app.post("/generate")
 def generate_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None)):
