@@ -795,3 +795,19 @@ if __name__ == "__main__":
             print(f"FAIL  {fn.__name__}: {e}")
     print(f"\n{len(fns)-failed}/{len(fns)} passed")
     sys.exit(1 if failed else 0)
+
+
+def test_title_suffix_leaves_layout_alone():
+    """공통 양식(토요모의고사)은 제목을 글자 그대로 찍는다 — 배치 지문은 그대로.
+
+    title_suffix 는 글자만 바꾼다. 지문이 달라지면 미리 뽑아 둔 답안지를 읽지 못한다.
+    """
+    from omr.layout import SheetConfig, layout_fingerprint
+
+    assert SheetConfig().title_suffix is True
+    a = SheetConfig(exam_id="TOMO", title="목동유쌤영어 토모", subject_label="영어영역",
+                    num_questions=45, num_choices=5, id_digits=5, questions_per_column=15, style="exam")
+    b = SheetConfig(exam_id="TOMO", title="목동유쌤영어 토모", subject_label="영어영역",
+                    num_questions=45, num_choices=5, id_digits=5, questions_per_column=15, style="exam",
+                    title_suffix=False)
+    assert layout_fingerprint(a) == layout_fingerprint(b)

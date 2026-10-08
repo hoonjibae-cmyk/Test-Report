@@ -295,7 +295,8 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     period = (cfg.period or "").strip()
     subject = (cfg.subject_label or "").strip()
     sheet_title = cfg.title or "모의고사"
-    if "답안지" not in sheet_title:
+    # 공통 양식(토요모의고사)은 제목을 글자 그대로 — '답안지'를 덧붙이지 않는다
+    if getattr(cfg, "title_suffix", True) and "답안지" not in sheet_title:
         sheet_title = sheet_title + " 답안지"
     has_sub = bool(period or subject)
     # 좌측 패널 공통 좌·우변 (layout.py의 panel_right와 동일식) — 제목 밴드부터
