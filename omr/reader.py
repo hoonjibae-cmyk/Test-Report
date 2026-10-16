@@ -20,6 +20,12 @@ import cv2
 import numpy as np
 
 
+# 채움률을 재는 창의 반지름 — 템플릿 버블 반지름에 대한 비율.
+# 버블의 분홍 테두리가 블러·적응 임계를 거치며 안쪽으로 번지므로, 창을 테두리에서
+# 떨어뜨려야 빈 버블의 채움률이 낮게 유지된다.
+SAMPLE_FRACTION = 0.85
+
+
 # 판정 파라미터 (기본값은 스캐너 입력 기준 보수적으로 설정)
 @dataclass
 class ReadParams:
@@ -318,7 +324,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     binv = _binarize(warped)
 
     ref_w = template["ref_w_mm"]
-    r = max(3, int(round(template["bubble_radius_mm"] / ref_w * Wc * 0.85)))
+    r = max(3, int(round(template["bubble_radius_mm"] / ref_w * Wc * SAMPLE_FRACTION)))
 
     # 버블별 채움률
     readings: list[BubbleReading] = []

@@ -114,12 +114,15 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
     # 버블
     r = layout.bubble_radius_mm
     c.setLineWidth(0.5)
+    # 라벨은 원 반지름에 비례(지름 5.2mm·5pt 기준) — 세로 보정도 같은 비율로
+    label_pt = bubble_text_pt(r, base_pt=5.0, base_radius_mm=2.6)
+    label_dy = 1.0 * r / 2.6
     for b in layout.bubbles:
         c.circle(X(b.x_mm), Y(b.y_mm), r * MM, stroke=1, fill=0)
         # 라벨 (버블 내부 소형 숫자)
-        c.setFont(font_name, 5)
+        c.setFont(font_name, label_pt)
         label = str(b.value) if b.role == "id" else str(b.value + 1)
-        c.drawCentredString(X(b.x_mm), Y(b.y_mm + 1.0), label)
+        c.drawCentredString(X(b.x_mm), Y(b.y_mm + label_dy), label)
 
     # 문항 번호 라벨
     c.setFont(font_name, 8)
@@ -157,7 +160,8 @@ def render_image(layout: Layout, dpi: int = 200, student=None, font_path: str | 
 
     f_title = load_font(15)
     f_info = load_font(8)
-    f_small = load_font(5)
+    # 버블 안 숫자 — 기본형은 지름 5.2mm·5pt이던 비율을 지킨다
+    f_small = load_font(bubble_text_pt(layout.bubble_radius_mm, base_pt=5.0, base_radius_mm=2.6))
     f_q = load_font(8)
 
     # 마커
@@ -202,6 +206,19 @@ def render_image(layout: Layout, dpi: int = 200, student=None, font_path: str | 
     return img
 
 
+def bubble_text_pt(radius_mm: float, base_pt: float = 4.8, base_radius_mm: float = 2.0) -> float:
+    """버블 안에 찍는 보기 번호의 글자 크기(pt) — 원 반지름에 비례한다.
+
+    지름 4mm에 4.8pt(글자 높이 약 1.2mm). 원을 줄이면서 숫자를 그대로 두면 빈 원
+    안에서 잉크가 차지하는 몫이 커져 판독기가 빈칸을 마킹으로 의심한다. 모의
+    스캔(200dpi, 대충 칠한 마킹 135문항)으로 잰 값:
+        옛 비율 그대로(지름 5mm·6.8pt → 4mm·6.8pt)  빈칸 채움률 0.33, 마킹 임계 0.30 초과
+        같은 비율로 축소(4mm·5.44pt)                 빈칸 0.27, 검수 9문항
+        여기 값(4mm·4.8pt)                           빈칸 0.25, 검수 0문항
+    """
+    return base_pt * radius_mm / base_radius_mm
+
+
 def _centered_text(draw, cx, cy, text, font, fill="black"):
     bbox = draw.textbbox((0, 0), text, font=font)
     w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
@@ -221,6 +238,12 @@ def _right_text(draw, rx, cy, text, font, fill="black"):
 _BG = (255, 255, 255)      # 배경 흰색
 _NAVY = (24, 60, 115)
 _PINK = (206, 118, 138)
+# 버블 테두리 두께(mm). 판독기는 테두리 안쪽(반지름의 85%) 창만 보지만, 블러와
+# 적응 임계를 거치며 테두리가 안으로 번지므로 두꺼울수록 빈 버블의 채움률이 오른다.
+# 지름 5mm 시절 0.4mm였다. 지름 4mm에서는 창이 테두리에 더 가까워져 같은 0.4mm로는
+# 빈칸 채움률이 0.25(마킹 임계 0.30 턱밑)까지 올랐고, 0.3mm로 줄이니 0.19로 옛
+# 답안지와 같은 여유가 돌아왔다(모의 스캔). 점만 찍은 표기도 마킹으로 읽히지 않는다.
+BUBBLE_OUTLINE_MM = 0.3
 _PINK_TEXT = (146, 58, 80)   # 버블 안 숫자 — 흑백/저품질 인쇄에서도 보이도록 외곽선보다 진하게
 _BAND = (238, 241, 246)    # 5행 그룹 음영(연한 회청)
 _BORDER = (176, 184, 196)
@@ -374,7 +397,8 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     # 문항 열 헤더(mt+24)보다 위에서 끝나도록 높이를 잡아 답란을 침범하지 않는다.
     _draw_marking_guide(d, mm, font,
                         ins_right + mm(7), mm(mt + 2.0),
-                        brand_left - mm(7), mm(mt + 22.0))
+                        brand_left - mm(7), mm(mt + 22.0),
+                        radius_mm=layout.bubble_radius_mm)
 
     # --- 좌측 인적사항 박스 (성명 / 학교·학년 / 수강반) ---
     # px0/px1은 제목 밴드에서 이미 계산 — 전 좌측 요소가 같은 두 변에 정렬된다.
@@ -407,12 +431,13 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                     outline=_BORDER, width=mm(0.4))
     # 0~9 버블 (흰 내부 + 분홍 외곽 + 숫자)
     r = mm(layout.bubble_radius_mm)
-    bf = font(6.8)
+    # 숫자는 원 반지름에 비례 — 원만 줄이면 빈칸 채움률이 올라 판독이 흔들린다
+    bf = font(bubble_text_pt(layout.bubble_radius_mm))
     for b in layout.bubbles:
         if b.role != "id":
             continue
         cx, cy = mm(b.x_mm), mm(b.y_mm)
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
         _centered_text(d, cx, cy, str(b.value), bf, fill=_PINK_TEXT)
 
     # --- 감독관 확인 ---
@@ -432,7 +457,7 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
 
     cpitch = layout.q_choice_pitch_mm
     rpitch = layout.q_row_pitch_mm
-    cf = font(6.8)
+    cf = font(bubble_text_pt(layout.bubble_radius_mm))
     header_y = mm(mt + 24)   # 첫 문항행(mt+37)과 충분히 이격
     for col_i, qmap in sorted(qbycol.items()):
         qnos = sorted(qmap)
@@ -463,7 +488,7 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
                            font(9, bold), fill=_NAVY if bold else _INK)
             for b in bl:
                 cx, cy = mm(b.x_mm), mm(b.y_mm)
-                d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
+                d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
                 _centered_text(d, cx, cy, str(b.value + 1), cf, fill=_PINK_TEXT)
         # 열 외곽선
         d.rectangle([mm(col_left), header_y, mm(col_right),
@@ -541,17 +566,18 @@ _GUIDE_SECTIONS = [
 ]
 
 
-def _draw_marking_guide(d, mm, font, x0, y0, x1, y1):
+def _draw_marking_guide(d, mm, font, x0, y0, x1, y1, radius_mm: float = 2.0):
     """상단 여백에 '바른 표기 / 모두 고르기 / 잘못된 표기' 예시를 그린다.
 
     좌표는 px. 남는 폭이 모자라면 오른쪽 구역부터 덜어내고, 그래도 좁으면
     아예 그리지 않는다(답란·로고를 절대 침범하지 않기 위한 안전장치).
+    예시 원은 답란의 실제 버블과 같은 크기로 그린다 — 학생이 보고 따라 칠하는 그림이다.
     """
     avail = x1 - x0
     if avail < mm(34) or (y1 - y0) < mm(16):
         return
 
-    r = mm(2.4)
+    r = mm(radius_mm)
     label_font = font(6.6, True)
     caption_cy = y0 + mm(8.2)
     bubble_cy = y0 + mm(14.6)
@@ -581,7 +607,7 @@ def _draw_marking_guide(d, mm, font, x0, y0, x1, y1):
 
     def guide_bubble(cx, kind):
         cy = bubble_cy
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(0.4))
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
         inner = r - mm(0.5)
         if kind == "full":
             d.ellipse([cx - inner, cy - inner, cx + inner, cy + inner], fill=_INK)
@@ -595,7 +621,7 @@ def _draw_marking_guide(d, mm, font, x0, y0, x1, y1):
             d.line([cx - inner, cy, cx - mm(0.3), cy + inner], fill=_INK, width=w)
             d.line([cx - mm(0.3), cy + inner, cx + inner, cy - inner], fill=_INK, width=w)
         else:                         # 숫자만 있는 빈 버블
-            _centered_text(d, cx, cy, kind, font(6.2), fill=_PINK_TEXT)
+            _centered_text(d, cx, cy, kind, font(bubble_text_pt(radius_mm)), fill=_PINK_TEXT)
 
     extra = (avail - total) // (len(sections) + 1)
     x = x0 + pad + extra

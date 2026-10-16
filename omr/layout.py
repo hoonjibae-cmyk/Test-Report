@@ -20,9 +20,25 @@ A4_H_MM = 297.0
 MARKER_DICT = "DICT_4X4_50"
 MARKER_IDS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 
+# 마킹 버블 반지름 (mm) — 지름 4.0mm.
+#
+# 예전에는 2.5(수능형)·2.6(기본형)으로 지름 5mm가 넘어 "칠할 게 너무 많다"는
+# 학생 의견이 있었다. 반지름만 줄이고 **중심 위치는 그대로** 둔다. 그래서 배치
+# 지문(LAYOUT_VERSION)은 올리지 않고, 미리 대량으로 뽑아 둔 옛 답안지(지름 5mm)도
+# 그대로 읽힌다 — 판독기는 반지름의 85% 안쪽만 보므로 큰 원을 작은 창으로 읽는
+# 셈이고, 모의 스캔에서 옛 답안지의 정확도·확신도가 그대로였다.
+#
+# 원 안의 보기 번호(generator.bubble_text_pt, 4.8pt)와 테두리(BUBBLE_OUTLINE_MM,
+# 0.3mm)는 원과 함께 줄여야 한다. 둘을 그대로 두면 빈 원의 채움률이 0.19→0.33으로
+# 올라 마킹 임계(0.30)를 넘고, 대충 칠한 답안지가 검수로 쏟아진다. 1.75(지름 3.5mm)
+# 아래는 150dpi 스캔에서 정확도가 떨어져 쓰지 않는다.
+BUBBLE_RADIUS_MM = 2.0
+# 옛 수능형 답안지의 반지름 — 호환 테스트가 이 크기로 그려 새 템플릿으로 읽어 본다
+LEGACY_BUBBLE_RADIUS_MM = 2.5
+
 # 수능형 배치 한계값 (mm)
 MIN_ROW_PITCH_MM = 6.5      # 문항 행 간격 하한 — 이보다 좁으면 버블이 붙는다
-MIN_CHOICE_PITCH_MM = 5.8   # 보기 버블 간격 하한(지름 5mm + 여백 0.8mm)
+MIN_CHOICE_PITCH_MM = 5.8   # 보기 버블 간격 하한 — 옛 지름 5mm 기준으로 잡은 값. 위치를 지키려 그대로 둔다
 ESSAY_PREF_MIN_MM = 46.0    # 서술형 칸 선호 최소 폭
 ESSAY_HARD_MIN_MM = 34.0    # 이보다 좁아지면 객관식 열 수를 줄인다
 ESSAY_MAX_MM = 130.0        # 상한 — 객관식이 적을 때 남는 폭을 서술형이 가져간다
@@ -51,6 +67,7 @@ class SheetConfig:
 
 # 버블 좌표 계산식이 바뀔 때마다 올린다. 설정이 같아도 배치가 달라지므로,
 # 예전 판으로 출력한 답안지를 새 템플릿으로 읽으면 어긋난다 — 지문에 포함해 걸러낸다.
+# 버블의 **크기**만 바뀐 것은 올리지 않는다(좌표가 같아 옛 답안지도 읽힌다).
 LAYOUT_VERSION = 3
 
 
@@ -200,7 +217,7 @@ def build_layout(config: SheetConfig) -> Layout:
     def norm(x: float, y: float) -> tuple:
         return (x - ref_left) / ref_w, (y - ref_top) / ref_h
 
-    bubble_radius = 2.6
+    bubble_radius = BUBBLE_RADIUS_MM
     bubbles: list[Bubble] = []
 
     # --- 상단 정보 영역 ---
@@ -308,7 +325,7 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     def norm(x, y):
         return (x - ref_left) / ref_w, (y - ref_top) / ref_h
 
-    bubble_radius = 2.5
+    bubble_radius = BUBBLE_RADIUS_MM
     bubbles: list[Bubble] = []
 
     title_xy = (m_left + 16, m_top + 4)

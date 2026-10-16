@@ -705,11 +705,13 @@ def test_blank_last_id_column_is_trimmed_even_on_a_noisy_scan():
     for col, digit in enumerate("1654"):
         _mark(img, layout, mm2px, "id", col, int(digit), 20)
     # 5번째 자리는 비운 채, 그 무리 전체를 고르게 흐리게 만든다(종이·인쇄 잡음).
-    # 밝기 175는 실측으로 고른 값이다 — 이때 가장 진한 칸이 0.276이 되어
+    # 밝기 187은 실측으로 고른 값이다 — 이때 가장 진한 칸이 0.276이 되어
     # '마킹(0.300)'과 '확실한 빈칸(0.255)' 사이, 즉 물음표가 나던 구간에 정확히
-    # 들어간다. 대신 무리 전체가 고르므로 최대÷중앙은 1.5배에 머문다.
+    # 들어간다. 대신 무리 전체가 고르므로 최대÷중앙은 1.2배에 머문다.
+    # (지름 5mm 시절에는 175였다. 원이 작아지면 같은 밝기의 고른 음영이 적응 임계에
+    #  더 진하게 잡히므로, 지름 4mm 기준으로 다시 잰 값이다.)
     for value in range(10):
-        _mark(img, layout, mm2px, "id", 4, value, 175, scale=0.95)
+        _mark(img, layout, mm2px, "id", 4, value, 187, scale=0.95)
 
     path = os.path.join(d, "noisy.png")
     cv2.imwrite(path, img)
@@ -782,6 +784,131 @@ def test_essay_crops_are_deskewed_and_readable():
     # 기본값에서는 만들지 않는다(필요할 때만 비용을 낸다)
     assert read_omr(p, res["template"]).essay_crops == {}
 
+
+
+# ---------------------------------------------------------------------------
+# 버블 지름 4.0mm (2026-10-16) — 크기만 줄고 위치는 그대로, 옛 답안지도 읽힌다
+# ---------------------------------------------------------------------------
+import numpy as np  # noqa: E402
+
+from omr.layout import BUBBLE_RADIUS_MM, LEGACY_BUBBLE_RADIUS_MM, layout_fingerprint  # noqa: E402
+from omr.generator import bubble_text_pt, render_sheet_image  # noqa: E402
+from omr.simulate import _apply_scan_distortion  # noqa: E402
+import omr.generator as _gen  # noqa: E402
+
+
+def _tomo_cfg(n=45):
+    return SheetConfig(exam_id="TOMO", title="목동유쌤영어 토모", num_questions=n, num_choices=5,
+                       id_digits=5, questions_per_column=15, style="exam",
+                       subject_label="영어영역", title_suffix=False)
+
+
+def test_bubble_is_4mm_but_positions_and_fingerprint_unchanged():
+    """반지름 2.0(지름 4mm). 중심 좌표와 배치 지문은 지름 5mm 시절 값 그대로여야
+    미리 뽑아 둔 토모 답안지가 '다른 배치'로 거부되지 않는다."""
+    assert BUBBLE_RADIUS_MM == 2.0
+    lay = build_layout(_tomo_cfg())
+    assert lay.bubble_radius_mm == 2.0
+    assert build_layout(SheetConfig(num_questions=40, id_digits=8)).bubble_radius_mm == 2.0
+    # 지름 5mm 시절에 뽑은 답안지 QR 에 새겨진 지문
+    assert layout_fingerprint(_tomo_cfg(45)) == "b25d0d32"
+    assert layout_fingerprint(_tomo_cfg(40)) == "4756ac3a"
+    assert layout_fingerprint(SheetConfig(num_questions=40, num_choices=5, id_digits=8,
+                                          questions_per_column=20, style="basic")) == "09f1a05a"
+    bub = {(b.role, b.index, b.value): (round(b.x_mm, 3), round(b.y_mm, 3)) for b in lay.bubbles}
+    assert bub[("question", 1, 0)] == (111.4, 52.5)
+    assert bub[("question", 45, 4)] == (256.6, 185.5)
+    assert bub[("id", 0, 0)] == (27.5, 106.5)
+    assert bub[("id", 4, 9)] == (63.5, 164.1)
+    assert len(lay.bubbles) == 275
+    # 숫자는 지름 4mm에 4.8pt — 원 반지름에 비례
+    assert abs(bubble_text_pt(2.0) - 4.8) < 1e-9
+    assert abs(bubble_text_pt(1.0) - 2.4) < 1e-9
+
+
+def _mark_sheet(layout, answers, sid, dpi, k, offset_mm, gray, seed):
+    """칠한 답안지 — k: 칠한 원의 반지름 비율, offset_mm: 중심 어긋남 최대, gray: 연필 진하기(0=검정)"""
+    pil = render_sheet_image(layout, dpi=dpi)
+    img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+    rng = np.random.default_rng(seed)
+
+    def mm2px(v):
+        return int(round(v / 25.4 * dpi))
+
+    r = max(1, mm2px(layout.bubble_radius_mm * k))
+    bub = {(b.role, b.index, b.value): b for b in layout.bubbles}
+
+    def fill(b):
+        dx, dy = rng.uniform(-offset_mm, offset_mm, 2)
+        cv2.circle(img, (mm2px(b.x_mm + dx), mm2px(b.y_mm + dy)), r, (gray, gray, gray), -1)
+
+    for q, c in answers.items():
+        fill(bub[("question", q, c - 1)])
+    for col, ch in enumerate(sid):
+        fill(bub[("id", col, int(ch))])
+    return _apply_scan_distortion(img, seed)
+
+
+def _read_marked(layout_print, cfg, dpi, k, offset, gray, trials=2):
+    """새 템플릿(반지름 2.0)으로 읽어 (오판, 불확실, 전체, 수험번호 일치, 시도) 를 돌려준다."""
+    d = _tmp()
+    tpl = generate(cfg, d, dpi=dpi, make_preview=False)["template"]
+    wrong = uncertain = total = ids = 0
+    for t in range(trials):
+        rng = random.Random(100 + t)
+        answers = {q: rng.randint(1, 5) for q in range(1, cfg.num_questions + 1)}
+        sid = "".join(rng.choice("0123456789") for _ in range(cfg.id_digits))
+        scan = _mark_sheet(layout_print, answers, sid, dpi, k, offset, gray, seed=t + 3)
+        p = os.path.join(d, f"m{t}.png")
+        cv2.imwrite(p, scan)
+        r = read_omr(p, tpl)
+        got = r.answers()
+        for q, a in answers.items():
+            total += 1
+            wrong += int(got.get(q) != a)
+        uncertain += len(r.uncertain_questions())
+        ids += int(r.student_id_bubbles == sid)
+    return wrong, uncertain, total, ids, trials
+
+
+def test_legacy_5mm_sheet_reads_with_the_new_template(monkeypatch):
+    """지름 5mm·숫자 6.8pt 로 미리 뽑아 둔 옛 토모 답안지를 새 판독(반지름 2.0 창)으로
+    읽어도 대충 칠한 마킹까지 전부 맞고 확신도 흔들리지 않는다."""
+    cfg = _tomo_cfg()
+    legacy = build_layout(cfg)
+    legacy.bubble_radius_mm = LEGACY_BUBBLE_RADIUS_MM
+    monkeypatch.setattr(_gen, "bubble_text_pt", lambda *a, **k: 6.8)   # 옛 숫자 크기
+    wrong, uncertain, total, ids, trials = _read_marked(legacy, cfg, 200, k=0.55, offset=0.8, gray=90)
+    assert wrong == 0, f"{wrong}/{total} 오판"
+    assert uncertain == 0, f"불확실 {uncertain}"
+    assert ids == trials
+
+
+def test_new_4mm_sheet_reads_sloppy_marks():
+    """새 답안지(지름 4mm)도 55%만 칠하고 0.8mm 어긋난 흐린 마킹을 전부 맞추고,
+    보통 마킹(70%·0.5mm)은 확신까지 온전하다."""
+    cfg = _tomo_cfg()
+    wrong, uncertain, total, ids, trials = _read_marked(build_layout(cfg), cfg, 200, k=0.55, offset=0.8, gray=90)
+    assert wrong == 0, f"{wrong}/{total} 오판"
+    assert uncertain <= total * 0.05, f"불확실 {uncertain}/{total}"
+    assert ids == trials
+    wrong, uncertain, total, ids, trials = _read_marked(build_layout(cfg), cfg, 200, k=0.7, offset=0.5, gray=70)
+    assert wrong == 0 and uncertain == 0 and ids == trials
+
+
+def test_blank_4mm_sheet_is_confidently_blank():
+    """아무것도 안 칠한 새 답안지 — 원 안의 숫자 때문에 빈칸이 마킹으로 의심되면 안 된다.
+    숫자를 원과 함께 줄였으므로 모든 문항이 확실한 미표기이고 채움률은 마킹 임계 아래다."""
+    cfg = _tomo_cfg()
+    d = _tmp()
+    tpl = generate(cfg, d, dpi=200, make_preview=False)["template"]
+    img = cv2.cvtColor(np.array(render_sheet_image(build_layout(cfg), dpi=200)), cv2.COLOR_RGB2BGR)
+    p = os.path.join(d, "blank.png")
+    cv2.imwrite(p, _apply_scan_distortion(img, 11))
+    r = read_omr(p, tpl)
+    assert all(g.status == "blank" and g.certain for g in r.questions.values())
+    fills = [f for g in r.questions.values() for f in g.fills.values()]
+    assert max(fills) < ReadParams().mark_abs_min, f"빈칸 채움률 최대 {max(fills):.2f}"
 
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
