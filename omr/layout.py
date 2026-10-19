@@ -63,6 +63,7 @@ class SheetConfig:
     # 제목에 '답안지'가 없을 때 ' 답안지'를 덧붙일지(수능형). 공통 양식처럼 제목을
     # 글자 그대로 찍어야 하면 False. 배치 지문에는 들어가지 않는다 — 글자만 바뀐다.
     title_suffix: bool = True
+    preferred_schedule: bool = False
 
 
 # 버블 좌표 계산식이 바뀔 때마다 올린다. 설정이 같아도 배치가 달라지므로,
@@ -89,6 +90,8 @@ def layout_fingerprint(config: "SheetConfig") -> str:
         str(config.style),
         str(max(0, int(config.essay_count or 0))),
     ]
+    if config.preferred_schedule:
+        parts.append("preferred-schedule-v1")
     raw = "|".join(parts).encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:8]
 
@@ -97,7 +100,7 @@ def layout_fingerprint(config: "SheetConfig") -> str:
 class Bubble:
     """단일 마킹 버블. 위치는 mm와 정규화(u, v) 좌표를 함께 보유."""
 
-    role: Literal["question", "id"]
+    role: Literal["question", "id", "schedule"]
     index: int          # question: 문항번호(1-base) / id: 자릿수 열(0-base)
     value: int          # question: 보기 인덱스(0-base) / id: 숫자값(0-9)
     x_mm: float
@@ -274,6 +277,12 @@ def build_layout(config: SheetConfig) -> Layout:
             u, v = norm(cx, cy)
             bubbles.append(Bubble("question", q, ci, cx, cy, u, v))
 
+    if config.preferred_schedule:
+        for value, x in enumerate([m_left + 12, m_left + 38, m_left + 64, m_left + 90]):
+            y = m_top + 23
+            u, v = norm(x, y)
+            bubbles.append(Bubble("schedule", 0, value, x, y, u, v))
+
     return Layout(
         config=config,
         page_w_mm=page_w,
@@ -350,6 +359,12 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     # 렌더러도 같은 식으로 계산해 제목 밴드·박스들을 이 우변에 정렬한다.
     panel_right = max(m_left + 54.0,
                       id_left + (config.id_digits - 1) * id_col_pitch + 6.0)
+
+    if config.preferred_schedule:
+        for value, x in enumerate([m_left + 9, m_left + 22, m_left + 35, m_left + 48]):
+            y = m_top + 65
+            u, v = norm(x, y)
+            bubbles.append(Bubble("schedule", 0, value, x, y, u, v))
 
     # --- 우측: 다단 객관식 문항 + (선택) 서술형 손기입 칸 ---
     n = config.num_questions
