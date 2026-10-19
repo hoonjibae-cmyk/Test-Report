@@ -111,6 +111,11 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
     c.setFont(font_name, 8)
     c.drawString(X(idx0 - 4), Y(idy0 - 7), "학번(수험번호) — 자리별 숫자 마킹")
 
+    if layout.config.preferred_schedule:
+        c.setFont(font_name, 7)
+        mx, my = layout.marker_centers_mm['TL']
+        c.drawString(X(mx + 112), Y(my + 23), "선호 요일 (하나만 선택)")
+
     # 버블
     r = layout.bubble_radius_mm
     c.setLineWidth(0.5)
@@ -121,6 +126,10 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
         c.circle(X(b.x_mm), Y(b.y_mm), r * MM, stroke=1, fill=0)
         # 라벨 (버블 내부 소형 숫자)
         c.setFont(font_name, label_pt)
+        if b.role == "schedule":
+            c.setFont(font_name, 7)
+            c.drawCentredString(X(b.x_mm), Y(b.y_mm - 4), ["화목", "월수금", "미정", "상관없음"][b.value])
+            continue
         label = str(b.value) if b.role == "id" else str(b.value + 1)
         c.drawCentredString(X(b.x_mm), Y(b.y_mm + label_dy), label)
 
@@ -192,9 +201,15 @@ def render_image(layout: Layout, dpi: int = 200, student=None, font_path: str | 
 
     # 버블
     r = mm2px(layout.bubble_radius_mm)
+    if layout.config.preferred_schedule:
+        mx, my = layout.marker_centers_mm['TL']
+        draw.text((mm2px(mx + 112), mm2px(my + 21)), "선호 요일 (하나만 선택)", font=load_font(7), fill="black")
     for b in layout.bubbles:
         cx, cy = mm2px(b.x_mm), mm2px(b.y_mm)
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=max(1, dpi // 200))
+        if b.role == "schedule":
+            _centered_text(draw, mm2px(b.x_mm), mm2px(b.y_mm - 4), ["화목", "월수금", "미정", "상관없음"][b.value], load_font(7), fill="black")
+            continue
         label = str(b.value) if b.role == "id" else str(b.value + 1)
         _centered_text(draw, cx, cy, label, f_small, fill=(120, 120, 120))
 
@@ -410,9 +425,22 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         if value:
             d.text((lx + mm(2), mm(y0) + mm(2.2)), value, font=font(9.5, True), fill=_INK)
 
-    field_box(mt + 30, mt + 42, "성 명", student.get("name", "") if student else "")
-    field_box(mt + 43, mt + 55, "학교 · 학년", student.get("school", "") if student else "")
-    field_box(mt + 56, mt + 68, "수 강 반", student.get("class", "") if student else "")
+    if cfg.preferred_schedule:
+        field_box(mt + 30, mt + 38, "성 명", student.get("name", "") if student else "")
+        field_box(mt + 39, mt + 47, "학교 · 학년", student.get("school", "") if student else "")
+        field_box(mt + 48, mt + 55, "수 강 반", student.get("class", "") if student else "")
+    else:
+        field_box(mt + 30, mt + 42, "성 명", student.get("name", "") if student else "")
+        field_box(mt + 43, mt + 55, "학교 · 학년", student.get("school", "") if student else "")
+    if cfg.preferred_schedule:
+        d.rectangle([px0, mm(mt + 56), px1, mm(mt + 69)], outline=_BORDER, width=mm(0.4))
+        d.text((px0 + mm(3), mm(mt + 56.5)), "선호 요일 (하나만 선택)", font=font(7, True), fill=_INK)
+        for b in [b for b in layout.bubbles if b.role == "schedule"]:
+            cx, cy, r = mm(b.x_mm), mm(b.y_mm), mm(layout.bubble_radius_mm)
+            _centered_text(d, cx, mm(mt + 61), ["화목", "월수금", "미정", "상관없음"][b.value], font(6), fill=_INK)
+            d.ellipse([cx-r,cy-r,cx+r,cy+r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
+    else:
+        field_box(mt + 56, mt + 68, "수 강 반", student.get("class", "") if student else "")
 
     # --- 수험번호 그리드 ---
     box_x0 = px0

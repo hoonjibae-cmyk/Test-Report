@@ -85,6 +85,7 @@ class ReadResult:
     preview_jpeg: bytes | None = None
     # {문항번호: JPEG} — 주관식 손기입 칸을 반듯하게 편 이미지(전사용)
     essay_crops: dict = field(default_factory=dict)
+    preferred_schedule: str | None = None
 
     def answers(self) -> dict:
         """{문항: 1-base 보기번호 또는 None} — 단일 선택 문항 기준."""
@@ -337,8 +338,9 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     # 그룹핑
     q_groups: dict[int, dict] = {}
     id_groups: dict[int, dict] = {}
+    schedule_groups: dict[int, dict] = {}
     for rd in readings:
-        tgt = q_groups if rd.role == "question" else id_groups
+        tgt = q_groups if rd.role == "question" else schedule_groups if rd.role == "schedule" else id_groups
         tgt.setdefault(rd.index, {})[rd.value] = rd.fill
 
     questions: dict[int, GroupResult] = {}
@@ -356,6 +358,14 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
                 # 확실한 미표기(=학생이 그냥 안 푼 문항)는 사람이 볼 필요가 없다.
                 "certain": certain,
             })
+
+    preferred_schedule = None
+    if schedule_groups:
+        chosen, status, selected, certain = _judge_group(schedule_groups[0], params)
+        if status == "ok" and certain and chosen is not None:
+            preferred_schedule = ["화목", "월수금", "미정", "상관없음"][chosen]
+        else:
+            review_flags.append({"type":"preferred_schedule", "status":status, "certain":False})
 
     # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
     id_cells = []            # (col, digit or None, blank?)
@@ -399,6 +409,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         warped_shape=(Wc, Hc),
         preview_jpeg=preview_jpeg,
         essay_crops=essay_crops,
+        preferred_schedule=preferred_schedule,
     )
 
 

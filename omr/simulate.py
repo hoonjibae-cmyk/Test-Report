@@ -18,7 +18,8 @@ def _mm2px(v, dpi):
 
 
 def simulate_marked(config: SheetConfig, answers: dict, student_id: str,
-                    dpi: int = 200, distort: bool = True, seed: int = 0) -> np.ndarray:
+                    dpi: int = 200, distort: bool = True, seed: int = 0,
+                    preferred_schedule: str | None = None) -> np.ndarray:
     """마킹된 스캔본(BGR np.ndarray)을 생성한다.
 
     answers: {문항no: 1-base 보기번호}
@@ -46,6 +47,12 @@ def simulate_marked(config: SheetConfig, answers: dict, student_id: str,
         if ch.isdigit():
             b = bub.get(("id", col, int(ch)))
             if b:
+                fill(b.x_mm, b.y_mm)
+
+    if preferred_schedule is not None:
+        values = ["화목", "월수금", "미정", "상관없음"]
+        for b in layout.bubbles:
+            if b.role == "schedule" and values[b.value] == preferred_schedule:
                 fill(b.x_mm, b.y_mm)
 
     if distort:
