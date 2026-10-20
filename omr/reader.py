@@ -25,6 +25,9 @@ import numpy as np
 # 떨어뜨려야 빈 버블의 채움률이 낮게 유지된다.
 SAMPLE_FRACTION = 0.85
 
+# 반배치고사 선호 요일 칸의 보기 — 버블 value 순서(생성기와 같다)
+SCHEDULE_LABELS = ["화목", "월수금", "미정", "상관없음"]
+
 
 # 판정 파라미터 (기본값은 스캐너 입력 기준 보수적으로 설정)
 @dataclass
@@ -361,15 +364,25 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
 
     # 선호 요일(반배치고사) — 보기 네 개 중 하나. 확실한 단독 표기만 값으로 삼고,
     # 비었거나 겹치거나 흐리면 사람이 정하도록 플래그만 남긴다.
+    #
+    # 플래그에는 '어느 칸이 가장 진했는지'(candidate)도 넣는다. 값으로 삼기엔
+    # 흐려도 학생이 칠한 칸은 대개 그 칸이라, 웹이 그것을 제안값으로 띄우면
+    # 선생님은 확인만 하면 된다. 확실한 빈칸(아무것도 안 칠함)은 제안할 게 없다.
     preferred_schedule = None
     schedule_results: dict[int, GroupResult] = {}
     if schedule_groups:
-        chosen, status, selected, certain = _judge_group(schedule_groups[0], params)
-        schedule_results[0] = GroupResult(0, chosen, status, schedule_groups[0], selected, certain)
+        fills = schedule_groups[0]
+        chosen, status, selected, certain = _judge_group(fills, params)
+        schedule_results[0] = GroupResult(0, chosen, status, fills, selected, certain)
         if status == "ok" and certain and chosen is not None:
-            preferred_schedule = ["화목", "월수금", "미정", "상관없음"][chosen]
+            preferred_schedule = SCHEDULE_LABELS[chosen]
         else:
-            review_flags.append({"type":"preferred_schedule", "status":status, "certain":False})
+            darkest = max(fills, key=fills.get)
+            review_flags.append({
+                "type": "preferred_schedule", "status": status, "certain": certain,
+                "candidate": None if (status == "blank" and certain) else SCHEDULE_LABELS[darkest],
+                "selected": [SCHEDULE_LABELS[v] for v in selected],
+            })
 
     # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
     id_cells = []            # (col, digit or None, blank?)
