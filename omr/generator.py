@@ -26,7 +26,8 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as rl_canvas
 
 from .fonts import find_font
-from .layout import Layout, SheetConfig, MARKER_DICT, MARKER_IDS, build_layout, layout_fingerprint
+from .layout import (ENROLLMENT_LABELS, Layout, MARKER_DICT, MARKER_IDS, SCHEDULE_LABELS, SheetConfig,
+                     build_layout, layout_fingerprint)
 
 
 # ----------------------------------------------------------------------------
@@ -109,12 +110,16 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
     # 학번 그리드 헤더
     idx0, idy0 = layout.id_origin_mm
     c.setFont(font_name, 8)
-    c.drawString(X(idx0 - 4), Y(idy0 - 7), "학번(수험번호) — 자리별 숫자 마킹")
+    c.drawString(X(idx0 - 4), Y(idy0 - 7), "수험번호(출결번호) — 자리별 숫자 마킹")
 
     if layout.config.preferred_schedule:
         c.setFont(font_name, 7)
         mx, my = layout.marker_centers_mm['TL']
-        c.drawString(X(mx + 112), Y(my + 23), "선호 요일 (하나만 선택)")
+        # 재원 구분 버블이 같은 줄 오른쪽에 오면 제목은 버블 위로 올린다
+        if layout.config.enrollment_mark:
+            c.drawString(X(mx + 4), Y(my + 16), "선호 요일 (하나만 선택)")
+        else:
+            c.drawString(X(mx + 112), Y(my + 23), "선호 요일 (하나만 선택)")
 
     # 버블
     r = layout.bubble_radius_mm
@@ -126,9 +131,10 @@ def render_pdf(layout: Layout, path: str, student=None, font_path: str | None = 
         c.circle(X(b.x_mm), Y(b.y_mm), r * MM, stroke=1, fill=0)
         # 라벨 (버블 내부 소형 숫자)
         c.setFont(font_name, label_pt)
-        if b.role == "schedule":
+        if b.role in ("schedule", "enrollment"):
             c.setFont(font_name, 7)
-            c.drawCentredString(X(b.x_mm), Y(b.y_mm - 4), ["화목", "월수금", "미정", "상관없음"][b.value])
+            names = SCHEDULE_LABELS if b.role == "schedule" else ENROLLMENT_LABELS
+            c.drawCentredString(X(b.x_mm), Y(b.y_mm - 4), names[b.value])
             continue
         label = str(b.value) if b.role == "id" else str(b.value + 1)
         c.drawCentredString(X(b.x_mm), Y(b.y_mm + label_dy), label)
@@ -197,18 +203,21 @@ def render_image(layout: Layout, dpi: int = 200, student=None, font_path: str | 
     draw.text((mm2px(layout.marker_centers_mm['TL'][0]), mm2px(layout.title_xy_mm[1] + 4)), info, font=f_info, fill="black")
 
     idx0, idy0 = layout.id_origin_mm
-    draw.text((mm2px(idx0 - 4), mm2px(idy0 - 8)), "학번(수험번호) - 자리별 숫자 마킹", font=f_info, fill="black")
+    draw.text((mm2px(idx0 - 4), mm2px(idy0 - 8)), "수험번호(출결번호) - 자리별 숫자 마킹", font=f_info, fill="black")
 
     # 버블
     r = mm2px(layout.bubble_radius_mm)
     if layout.config.preferred_schedule:
         mx, my = layout.marker_centers_mm['TL']
-        draw.text((mm2px(mx + 112), mm2px(my + 21)), "선호 요일 (하나만 선택)", font=load_font(7), fill="black")
+        # 재원 구분 버블이 같은 줄 오른쪽에 오면 제목은 버블 위로 올린다
+        title_xy = (mx + 4, my + 14) if layout.config.enrollment_mark else (mx + 112, my + 21)
+        draw.text((mm2px(title_xy[0]), mm2px(title_xy[1])), "선호 요일 (하나만 선택)", font=load_font(7), fill="black")
     for b in layout.bubbles:
         cx, cy = mm2px(b.x_mm), mm2px(b.y_mm)
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=max(1, dpi // 200))
-        if b.role == "schedule":
-            _centered_text(draw, mm2px(b.x_mm), mm2px(b.y_mm - 4), ["화목", "월수금", "미정", "상관없음"][b.value], load_font(7), fill="black")
+        if b.role in ("schedule", "enrollment"):
+            names = SCHEDULE_LABELS if b.role == "schedule" else ENROLLMENT_LABELS
+            _centered_text(draw, mm2px(b.x_mm), mm2px(b.y_mm - 4), names[b.value], load_font(7), fill="black")
             continue
         label = str(b.value) if b.role == "id" else str(b.value + 1)
         _centered_text(draw, cx, cy, label, f_small, fill=(120, 120, 120))
@@ -384,11 +393,16 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
     ins_x = tb_x1 + mm(8)
     ins_y = mm(mt + 8)
     ins_font = font(8.0)
+    schedule_bubbles = [b for b in layout.bubbles if b.role == "schedule"]
+    enrollment_bubbles = [b for b in layout.bubbles if b.role == "enrollment"]
     ins_lines = [
         "※ 검은색 컴퓨터용 사인펜만 사용하여 표기하십시오.",
-        "※ 수험번호는 왼쪽부터 채워 표기(4~5자리).",
+        "※ 수험번호(출결번호)는 왼쪽부터 채워 표기(4~5자리).",
         "※ 한 문항에 하나만 표기 — ‘모두 고르기’ 문항은 예외.",
     ]
+    # 신규생은 수험번호(출결번호)가 없다 — 대신 무엇을 쓸지 종이에서 바로 알려 준다
+    if enrollment_bubbles:
+        ins_lines.append("※ 신규생: ‘신규생’ 표기 후 수험번호 칸에 전화번호 뒤 4자리.")
     # 서술형 답란은 그 칸만 잘라 내 읽는다. 칸 밖으로 나간 글씨는 잘려 나가
     # 채점자에게 보이지 않으므로, 쓰기 전에 알려 준다.
     #
@@ -399,7 +413,12 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         ins_lines.append("※ 서술형은 칸 안에 쓰십시오(칸 밖은 채점 불가).")
     # 줄이 하나 늘어도 아래 문항 열 헤더(mt+24)를 침범하지 않게 위로 당기고
     # 간격을 좁힌다.
-    if len(ins_lines) > 3:
+    if len(ins_lines) > 4:
+        # 다섯 줄(반배치고사 + 서술형) — 글자도 조금 줄여야 헤더 위에서 끝난다
+        ins_y = mm(mt + 5.5)
+        ins_step = mm(3.6)
+        ins_font = font(7.4)
+    elif len(ins_lines) > 3:
         ins_y = mm(mt + 5.5)
         ins_step = mm(4.2)
     else:
@@ -426,34 +445,65 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         if value:
             d.text((px0 + mm(26), mm(y0) + mm(2.2)), value, font=font(9.5, True), fill=_INK)
 
-    if cfg.preferred_schedule:
-        field_box(mt + 30, mt + 38, "성 명", student.get("name", "") if student else "")
-        field_box(mt + 39, mt + 47, "학교 · 학년", student.get("school", "") if student else "")
-        field_box(mt + 48, mt + 55, "수 강 반", student.get("class", "") if student else "")
-    else:
-        field_box(mt + 30, mt + 42, "성 명", student.get("name", "") if student else "")
-        field_box(mt + 43, mt + 55, "학교 · 학년", student.get("school", "") if student else "")
-    if cfg.preferred_schedule:
-        d.rectangle([px0, mm(mt + 56), px1, mm(mt + 69)], outline=_BORDER, width=mm(0.4))
-        d.text((px0 + mm(3), mm(mt + 56.5)), "선호 요일 (하나만 선택)", font=font(7, True), fill=_INK)
-        for b in [b for b in layout.bubbles if b.role == "schedule"]:
+    name_v = student.get("name", "") if student else ""
+    school_v = student.get("school", "") if student else ""
+    class_v = student.get("class", "") if student else ""
+    if enrollment_bubbles:
+        # 반배치고사(재원 구분 칸 있음) — 칸을 촘촘히 쌓는다. 감독관 확인란은 두지 않는다.
+        field_box(mt + 30, mt + 38, "성 명", name_v)
+        field_box(mt + 39, mt + 47, "학교 · 학년", school_v)
+        field_box(mt + 48, mt + 56, "수 강 반", class_v)
+        ey = enrollment_bubbles[0].y_mm
+        d.rectangle([px0, mm(ey - 5), px1, mm(ey + 4)], outline=_BORDER, width=mm(0.4))
+        _left_mid(px0 + mm(3), mm(ey), "재원 구분", font(7.5, True), fill=_INK)
+        for b in enrollment_bubbles:
             cx, cy, r = mm(b.x_mm), mm(b.y_mm), mm(layout.bubble_radius_mm)
-            _centered_text(d, cx, mm(mt + 61), ["화목", "월수금", "미정", "상관없음"][b.value], font(6), fill=_INK)
-            d.ellipse([cx-r,cy-r,cx+r,cy+r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
+            # 보기 이름은 버블 오른쪽 — 한 줄에 둘을 나란히 둔다
+            _left_mid(cx + r + mm(1.4), cy, ENROLLMENT_LABELS[b.value], font(7, True), fill=_INK)
+    elif schedule_bubbles:
+        field_box(mt + 30, mt + 38, "성 명", name_v)
+        field_box(mt + 39, mt + 47, "학교 · 학년", school_v)
+        field_box(mt + 48, mt + 55, "수 강 반", class_v)
     else:
-        field_box(mt + 56, mt + 68, "수 강 반", student.get("class", "") if student else "")
+        field_box(mt + 30, mt + 42, "성 명", name_v)
+        field_box(mt + 43, mt + 55, "학교 · 학년", school_v)
+    if schedule_bubbles:
+        # 상자는 버블 위치에서 거꾸로 잡는다 — 버블 자리는 layout.py가 정한다
+        sy = schedule_bubbles[0].y_mm
+        d.rectangle([px0, mm(sy - 9), px1, mm(sy + 4)], outline=_BORDER, width=mm(0.4))
+        d.text((px0 + mm(3), mm(sy - 8.5)), "선호 요일 (하나만 선택)", font=font(7, True), fill=_INK)
+        for b in schedule_bubbles:
+            cx, cy, r = mm(b.x_mm), mm(b.y_mm), mm(layout.bubble_radius_mm)
+            _centered_text(d, cx, mm(sy - 4), SCHEDULE_LABELS[b.value], font(6), fill=_INK)
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
+    elif not enrollment_bubbles:
+        field_box(mt + 56, mt + 68, "수 강 반", class_v)
 
-    # --- 수험번호 그리드 ---
+    # --- 수험번호(출결번호) 그리드 ---
     box_x0 = px0
     box_x1 = px1
-    box_y0 = mm(mt + 71)
+    # 재원 구분 칸이 있으면 상자 머리에 신규생 안내 한 줄이 더 들어간다
+    box_y0 = mm(idt - (22 if enrollment_bubbles else 20))
     box_y1 = mm(idt + 9 * rp + 5)
     d.rectangle([box_x0, box_y0, box_x1, box_y1], outline=_NAVY, width=mm(0.5))
-    # 라벨과 안내문을 같은 줄에 두어 기입칸과 겹치지 않게 함
-    d.text((box_x0 + mm(3), box_y0 + mm(2.2)), "수 험 번 호", font=font(9, True), fill=_NAVY)
-    d.text((box_x0 + mm(27), box_y0 + mm(3.2)), "(왼쪽부터 4~5자리)", font=font(6.8), fill=_INK)
+    # 라벨 — 학원은 수험번호로 출결번호를 쓴다. 종이에 그대로 적어 학생이 무엇을 쓸지
+    # 묻지 않게 한다. 안내문은 같은 줄에 들어가면 오른쪽에, 안 들어가면 아랫줄에.
+    label_font = font(9, True)
+    d.text((box_x0 + mm(3), box_y0 + mm(2.2)), "수험번호(출결번호)", font=label_font, fill=_NAVY)
+    hint = "(왼쪽부터 4~5자리)"
+    hint_font = font(6.8)
+    hint_x = box_x0 + mm(3) + int(d.textlength("수험번호(출결번호)", font=label_font)) + mm(2.5)
+    hint_y = box_y0 + mm(3.2)
+    if hint_x + d.textlength(hint, font=hint_font) > box_x1 - mm(2):
+        hint_x, hint_y, hint_font = box_x0 + mm(3), box_y0 + mm(6.2), font(6.3)
+    d.text((hint_x, hint_y), hint, font=hint_font, fill=_INK)
+    if enrollment_bubbles:
+        # 신규생은 수험번호(출결번호)가 없다 — 대신 쓸 것을 칸 안에 적어 둔다
+        note_y = box_y0 + mm(9.3 if hint_y > box_y0 + mm(5) else 6.3)
+        d.text((box_x0 + mm(3), note_y), "신규생은 학생·학부모 전화번호 뒤 4자리", font=font(6.3), fill=_INK)
     # 상단 기입 칸 (안내문 아래, 버블 위 — 상하 모두 이격)
-    write_y0 = mm(mt + 80)
+    write_y0 = mm(idt - (10 if enrollment_bubbles else 11))
     for col in range(cfg.id_digits):
         cx = mm(idl + col * cp)
         d.rectangle([cx - mm(3.2), write_y0, cx + mm(3.2), write_y0 + mm(5.5)],
@@ -469,11 +519,12 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
         d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white", outline=_PINK, width=mm(BUBBLE_OUTLINE_MM))
         _centered_text(d, cx, cy, str(b.value), bf, fill=_PINK_TEXT)
 
-    # --- 감독관 확인 ---
-    gv_y0 = box_y1 + mm(4)
-    d.rectangle([box_x0, gv_y0, box_x1, gv_y0 + mm(15)], outline=_BORDER, width=mm(0.4))
-    d.text((box_x0 + mm(3), gv_y0 + mm(2)), "감독관 확인", font=font(9, True), fill=_INK)
-    d.text((box_x0 + mm(3), gv_y0 + mm(7.5)), "(서명 또는 날인)", font=font(7.2), fill=_INK)
+    # --- 감독관 확인 --- (반배치고사는 재원 구분 칸에 자리를 내주고 뺐다)
+    if not enrollment_bubbles:
+        gv_y0 = box_y1 + mm(4)
+        d.rectangle([box_x0, gv_y0, box_x1, gv_y0 + mm(15)], outline=_BORDER, width=mm(0.4))
+        d.text((box_x0 + mm(3), gv_y0 + mm(2)), "감독관 확인", font=font(9, True), fill=_INK)
+        d.text((box_x0 + mm(3), gv_y0 + mm(7.5)), "(서명 또는 날인)", font=font(7.2), fill=_INK)
 
     # --- 문항 (다단, 5행 그룹 음영 + 5의 배수 굵게) ---
     # 설정값이 아니라 배치에서 확정된 값 — 종이에 안 맞으면 조정되었을 수 있다.

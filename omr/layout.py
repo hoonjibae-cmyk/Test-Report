@@ -63,7 +63,27 @@ class SheetConfig:
     # 제목에 '답안지'가 없을 때 ' 답안지'를 덧붙일지(수능형). 공통 양식처럼 제목을
     # 글자 그대로 찍어야 하면 False. 배치 지문에는 들어가지 않는다 — 글자만 바뀐다.
     title_suffix: bool = True
+    # 선호 요일 칸(반배치고사) — 화목/월수금/미정/상관없음 버블 네 개
     preferred_schedule: bool = False
+    # 재원 구분 칸(반배치고사) — 재원생/신규생 버블 두 개. 켜면 수능형 좌측 패널이
+    # 재배치된다: 감독관 확인란이 빠지고 그 자리만큼 수험번호 그리드가 내려간다.
+    # 신규생은 수험번호(출결번호)가 없어 그 칸에 전화번호 뒤 4자리를 쓴다 — 어느
+    # 쪽으로 읽을지를 이 칸이 정한다.
+    enrollment_mark: bool = False
+
+
+# 선호 요일·재원 구분 칸의 보기 — 버블 value 순서. 생성기·판독기·모의 스캔이 같은
+# 표를 봐야 하므로 여기서만 정한다.
+SCHEDULE_LABELS = ["화목", "월수금", "미정", "상관없음"]
+ENROLLMENT_LABELS = ["재원생", "신규생"]
+
+# 수능형 좌측 패널에서 반배치고사 칸들이 놓이는 세로 위치(m_top 기준 mm).
+# 재원 구분 칸(9mm)이 끼면 그 아래 선호 요일과 수험번호 그리드가 함께 내려간다.
+EXAM_SCHEDULE_Y_MM = 65            # 선호 요일 버블 — 재원 구분 칸이 없을 때(예전 배치)
+EXAM_ENROLLMENT_Y_MM = 62          # 재원 구분 버블
+EXAM_SCHEDULE_Y_SHIFTED_MM = 76    # 선호 요일 버블 — 재원 구분 칸이 있을 때
+EXAM_ID_TOP_MM = 91                # 수험번호 그리드 첫 행
+EXAM_ID_TOP_SHIFTED_MM = 103       # 수험번호 그리드 첫 행 — 재원 구분 칸이 있을 때
 
 
 # 버블 좌표 계산식이 바뀔 때마다 올린다. 설정이 같아도 배치가 달라지므로,
@@ -92,6 +112,9 @@ def layout_fingerprint(config: "SheetConfig") -> str:
     ]
     if config.preferred_schedule:
         parts.append("preferred-schedule-v1")
+    if config.enrollment_mark:
+        # 버블이 늘 뿐 아니라 수험번호·선호 요일 자리도 옮겨 간다 — 다른 종이다
+        parts.append("enrollment-v1")
     raw = "|".join(parts).encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:8]
 
@@ -100,9 +123,9 @@ def layout_fingerprint(config: "SheetConfig") -> str:
 class Bubble:
     """단일 마킹 버블. 위치는 mm와 정규화(u, v) 좌표를 함께 보유."""
 
-    role: Literal["question", "id", "schedule"]
-    index: int          # question: 문항번호(1-base) / id: 자릿수 열(0-base)
-    value: int          # question: 보기 인덱스(0-base) / id: 숫자값(0-9)
+    role: Literal["question", "id", "schedule", "enrollment"]
+    index: int          # question: 문항번호(1-base) / id: 자릿수 열(0-base) / 그 밖은 0
+    value: int          # question: 보기 인덱스(0-base) / id: 숫자값(0-9) / schedule·enrollment: 보기 인덱스
     x_mm: float
     y_mm: float
     u: float = 0.0
@@ -282,6 +305,12 @@ def build_layout(config: SheetConfig) -> Layout:
             y = m_top + 23
             u, v = norm(x, y)
             bubbles.append(Bubble("schedule", 0, value, x, y, u, v))
+    if config.enrollment_mark:
+        # 같은 줄 오른쪽, 우상단 QR(ref_right-22부터) 왼쪽에서 멈춘다
+        for value, x in enumerate([m_left + 118, m_left + 136]):
+            y = m_top + 23
+            u, v = norm(x, y)
+            bubbles.append(Bubble("enrollment", 0, value, x, y, u, v))
 
     return Layout(
         config=config,
@@ -343,8 +372,10 @@ def build_exam_layout(config: SheetConfig) -> Layout:
 
     # --- 좌측 패널: 수험번호 그리드 (4~5자리, 왼쪽부터 채워쓰기) ---
     # 성명·학교/학년·수강반 박스 아래로 충분히 내려 간섭 제거.
+    # 재원 구분 칸(반배치고사)이 들어오면 그만큼 더 내린다 — 감독관 확인란을 빼서
+    # 아래쪽에 자리가 난다.
     id_left = m_left + 12
-    id_top = m_top + 91
+    id_top = m_top + (EXAM_ID_TOP_SHIFTED_MM if config.enrollment_mark else EXAM_ID_TOP_MM)
     id_col_pitch = 9.0
     id_row_pitch = 6.4
     id_origin = (id_left, id_top)
@@ -360,9 +391,15 @@ def build_exam_layout(config: SheetConfig) -> Layout:
     panel_right = max(m_left + 54.0,
                       id_left + (config.id_digits - 1) * id_col_pitch + 6.0)
 
+    if config.enrollment_mark:
+        # 재원 구분 — 수강반 칸 바로 아래 한 줄. 보기 이름은 버블 오른쪽에 쓴다.
+        for value, x in enumerate([m_left + 24, m_left + 40]):
+            y = m_top + EXAM_ENROLLMENT_Y_MM
+            u, v = norm(x, y)
+            bubbles.append(Bubble("enrollment", 0, value, x, y, u, v))
     if config.preferred_schedule:
+        y = m_top + (EXAM_SCHEDULE_Y_SHIFTED_MM if config.enrollment_mark else EXAM_SCHEDULE_Y_MM)
         for value, x in enumerate([m_left + 9, m_left + 22, m_left + 35, m_left + 48]):
-            y = m_top + 65
             u, v = norm(x, y)
             bubbles.append(Bubble("schedule", 0, value, x, y, u, v))
 

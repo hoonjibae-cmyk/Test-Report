@@ -19,14 +19,13 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from .layout import ENROLLMENT_LABELS, SCHEDULE_LABELS
+
 
 # 채움률을 재는 창의 반지름 — 템플릿 버블 반지름에 대한 비율.
 # 버블의 분홍 테두리가 블러·적응 임계를 거치며 안쪽으로 번지므로, 창을 테두리에서
 # 떨어뜨려야 빈 버블의 채움률이 낮게 유지된다.
 SAMPLE_FRACTION = 0.85
-
-# 반배치고사 선호 요일 칸의 보기 — 버블 value 순서(생성기와 같다)
-SCHEDULE_LABELS = ["화목", "월수금", "미정", "상관없음"]
 
 
 # 판정 파라미터 (기본값은 스캐너 입력 기준 보수적으로 설정)
@@ -88,7 +87,10 @@ class ReadResult:
     preview_jpeg: bytes | None = None
     # {문항번호: JPEG} — 주관식 손기입 칸을 반듯하게 편 이미지(전사용)
     essay_crops: dict = field(default_factory=dict)
+    # 반배치고사 — 선호 요일('화목' 등)·재원 구분('재원생'/'신규생'). 확실한 단독
+    # 표기만 값이 되고, 아니면 None에 review_flags로 사정을 남긴다.
     preferred_schedule: str | None = None
+    enrollment: str | None = None
 
     def answers(self) -> dict:
         """{문항: 1-base 보기번호 또는 None} — 단일 선택 문항 기준."""
@@ -338,13 +340,17 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         f = _fill_ratio(binv, cx, cy, r)
         readings.append(BubbleReading(b["role"], b["index"], b["value"], f))
 
-    # 그룹핑
+    # 그룹핑 — 문항·수험번호 자리는 index별, 보기 하나를 고르는 칸(선호 요일·재원 구분)은 role별
     q_groups: dict[int, dict] = {}
     id_groups: dict[int, dict] = {}
-    schedule_groups: dict[int, dict] = {}
+    field_groups: dict[str, dict] = {}
     for rd in readings:
-        tgt = q_groups if rd.role == "question" else schedule_groups if rd.role == "schedule" else id_groups
-        tgt.setdefault(rd.index, {})[rd.value] = rd.fill
+        if rd.role == "question":
+            q_groups.setdefault(rd.index, {})[rd.value] = rd.fill
+        elif rd.role == "id":
+            id_groups.setdefault(rd.index, {})[rd.value] = rd.fill
+        else:
+            field_groups.setdefault(rd.role, {})[rd.value] = rd.fill
 
     questions: dict[int, GroupResult] = {}
     id_columns: dict[int, GroupResult] = {}
@@ -362,27 +368,32 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
                 "certain": certain,
             })
 
-    # 선호 요일(반배치고사) — 보기 네 개 중 하나. 확실한 단독 표기만 값으로 삼고,
-    # 비었거나 겹치거나 흐리면 사람이 정하도록 플래그만 남긴다.
+    # 보기 하나를 고르는 칸(반배치고사) — 선호 요일·재원 구분. 확실한 단독 표기만
+    # 값으로 삼고, 비었거나 겹치거나 흐리면 사람이 정하도록 플래그만 남긴다.
     #
     # 플래그에는 '어느 칸이 가장 진했는지'(candidate)도 넣는다. 값으로 삼기엔
     # 흐려도 학생이 칠한 칸은 대개 그 칸이라, 웹이 그것을 제안값으로 띄우면
     # 선생님은 확인만 하면 된다. 확실한 빈칸(아무것도 안 칠함)은 제안할 게 없다.
-    preferred_schedule = None
-    schedule_results: dict[int, GroupResult] = {}
-    if schedule_groups:
-        fills = schedule_groups[0]
+    field_results: dict[str, GroupResult] = {}
+
+    def judge_field(role: str, labels: list, flag_type: str):
+        fills = field_groups.get(role)
+        if not fills:
+            return None
         chosen, status, selected, certain = _judge_group(fills, params)
-        schedule_results[0] = GroupResult(0, chosen, status, fills, selected, certain)
+        field_results[role] = GroupResult(0, chosen, status, fills, selected, certain)
         if status == "ok" and certain and chosen is not None:
-            preferred_schedule = SCHEDULE_LABELS[chosen]
-        else:
-            darkest = max(fills, key=fills.get)
-            review_flags.append({
-                "type": "preferred_schedule", "status": status, "certain": certain,
-                "candidate": None if (status == "blank" and certain) else SCHEDULE_LABELS[darkest],
-                "selected": [SCHEDULE_LABELS[v] for v in selected],
-            })
+            return labels[chosen]
+        darkest = max(fills, key=fills.get)
+        review_flags.append({
+            "type": flag_type, "status": status, "certain": certain,
+            "candidate": None if (status == "blank" and certain) else labels[darkest],
+            "selected": [labels[v] for v in selected],
+        })
+        return None
+
+    preferred_schedule = judge_field("schedule", SCHEDULE_LABELS, "preferred_schedule")
+    enrollment = judge_field("enrollment", ENROLLMENT_LABELS, "enrollment")
 
     # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
     id_cells = []            # (col, digit or None, blank?)
@@ -409,7 +420,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
 
     preview_jpeg = None
     if debug_out or make_preview:
-        vis = _annotate(warped, template, questions, id_columns, r, Wc, Hc, schedule_results)
+        vis = _annotate(warped, template, questions, id_columns, r, Wc, Hc, field_results)
         if debug_out:
             cv2.imwrite(debug_out, vis)
         if make_preview:
@@ -427,6 +438,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
         preview_jpeg=preview_jpeg,
         essay_crops=essay_crops,
         preferred_schedule=preferred_schedule,
+        enrollment=enrollment,
     )
 
 
@@ -440,18 +452,21 @@ def _encode_preview(vis, width: int, quality: int) -> bytes | None:
     return buf.tobytes() if ok else None
 
 
-def _annotate(warped, template, questions, id_columns, r, Wc, Hc, schedule=None):
+def _annotate(warped, template, questions, id_columns, r, Wc, Hc, fields=None):
     """보정된 이미지 위에 버블별 판정 결과를 그린 컬러 이미지를 만든다.
 
     확신 없는 판정(회색지대)은 주황으로 따로 표시한다. 검수 화면에 걸린 답안지가
     '왜 걸렸는지'를 사람이 그림에서 바로 찾을 수 있어야 하기 때문이다.
-    선호 요일(반배치고사) 버블도 같은 색으로 그린다 — 검수자가 그 자리만 못 보면 안 된다.
+    선호 요일·재원 구분(반배치고사) 버블도 같은 색으로 그린다 — 검수자가 그 자리만
+    못 보면 안 된다. `fields`는 {role: GroupResult} (role 하나에 그룹 하나, key 0).
     """
     vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
     color = {"ok": (0, 170, 0), "blank": (160, 160, 160), "multiple": (0, 0, 220)}
     uncertain_c = (0, 150, 255)      # 주황(BGR) — 경계에 걸쳐 사람이 봐야 하는 자리
     lut = {(b["role"], b["index"], b["value"]): b for b in template["bubbles"]}
-    for grp, role in ((questions, "question"), (id_columns, "id"), (schedule or {}, "schedule")):
+    groups = [(questions, "question"), (id_columns, "id")]
+    groups += [({0: g}, role) for role, g in (fields or {}).items()]
+    for grp, role in groups:
         for key, g in grp.items():
             best = max(g.fills.values()) if g.fills else 0.0
             for value, fill in g.fills.items():

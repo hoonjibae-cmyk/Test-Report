@@ -10,7 +10,7 @@ import numpy as np
 import cv2
 
 from .generator import render_sheet_image
-from .layout import Layout, SheetConfig, build_layout
+from .layout import ENROLLMENT_LABELS, Layout, SCHEDULE_LABELS, SheetConfig, build_layout
 
 
 def _mm2px(v, dpi):
@@ -19,11 +19,13 @@ def _mm2px(v, dpi):
 
 def simulate_marked(config: SheetConfig, answers: dict, student_id: str,
                     dpi: int = 200, distort: bool = True, seed: int = 0,
-                    preferred_schedule: str | None = None) -> np.ndarray:
+                    preferred_schedule: str | None = None,
+                    enrollment: str | None = None) -> np.ndarray:
     """마킹된 스캔본(BGR np.ndarray)을 생성한다.
 
     answers: {문항no: 1-base 보기번호}
     student_id: 자릿수 문자열 (예: "20250042"); 길이는 config.id_digits 이하.
+    preferred_schedule / enrollment: 반배치고사 칸의 보기 이름('월수금', '신규생' 등).
     """
     layout = build_layout(config)
     pil = render_sheet_image(layout, dpi=dpi)
@@ -49,10 +51,13 @@ def simulate_marked(config: SheetConfig, answers: dict, student_id: str,
             if b:
                 fill(b.x_mm, b.y_mm)
 
-    if preferred_schedule is not None:
-        values = ["화목", "월수금", "미정", "상관없음"]
+    # 보기 하나를 고르는 칸(반배치고사) — 이름으로 버블을 찾아 칠한다
+    for role, names, want in (("schedule", SCHEDULE_LABELS, preferred_schedule),
+                              ("enrollment", ENROLLMENT_LABELS, enrollment)):
+        if want is None:
+            continue
         for b in layout.bubbles:
-            if b.role == "schedule" and values[b.value] == preferred_schedule:
+            if b.role == role and names[b.value] == want:
                 fill(b.x_mm, b.y_mm)
 
     if distort:
