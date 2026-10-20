@@ -359,9 +359,13 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
                 "certain": certain,
             })
 
+    # 선호 요일(반배치고사) — 보기 네 개 중 하나. 확실한 단독 표기만 값으로 삼고,
+    # 비었거나 겹치거나 흐리면 사람이 정하도록 플래그만 남긴다.
     preferred_schedule = None
+    schedule_results: dict[int, GroupResult] = {}
     if schedule_groups:
         chosen, status, selected, certain = _judge_group(schedule_groups[0], params)
+        schedule_results[0] = GroupResult(0, chosen, status, schedule_groups[0], selected, certain)
         if status == "ok" and certain and chosen is not None:
             preferred_schedule = ["화목", "월수금", "미정", "상관없음"][chosen]
         else:
@@ -392,7 +396,7 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
 
     preview_jpeg = None
     if debug_out or make_preview:
-        vis = _annotate(warped, template, questions, id_columns, r, Wc, Hc)
+        vis = _annotate(warped, template, questions, id_columns, r, Wc, Hc, schedule_results)
         if debug_out:
             cv2.imwrite(debug_out, vis)
         if make_preview:
@@ -423,17 +427,18 @@ def _encode_preview(vis, width: int, quality: int) -> bytes | None:
     return buf.tobytes() if ok else None
 
 
-def _annotate(warped, template, questions, id_columns, r, Wc, Hc):
+def _annotate(warped, template, questions, id_columns, r, Wc, Hc, schedule=None):
     """보정된 이미지 위에 버블별 판정 결과를 그린 컬러 이미지를 만든다.
 
     확신 없는 판정(회색지대)은 주황으로 따로 표시한다. 검수 화면에 걸린 답안지가
     '왜 걸렸는지'를 사람이 그림에서 바로 찾을 수 있어야 하기 때문이다.
+    선호 요일(반배치고사) 버블도 같은 색으로 그린다 — 검수자가 그 자리만 못 보면 안 된다.
     """
     vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
     color = {"ok": (0, 170, 0), "blank": (160, 160, 160), "multiple": (0, 0, 220)}
     uncertain_c = (0, 150, 255)      # 주황(BGR) — 경계에 걸쳐 사람이 봐야 하는 자리
     lut = {(b["role"], b["index"], b["value"]): b for b in template["bubbles"]}
-    for grp, role in ((questions, "question"), (id_columns, "id")):
+    for grp, role in ((questions, "question"), (id_columns, "id"), (schedule or {}, "schedule")):
         for key, g in grp.items():
             best = max(g.fills.values()) if g.fills else 0.0
             for value, fill in g.fills.items():

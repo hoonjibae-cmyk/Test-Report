@@ -417,13 +417,14 @@ def render_exam_image(layout: Layout, dpi: int = 200, student=None,
 
     # --- 좌측 인적사항 박스 (성명 / 학교·학년 / 수강반) ---
     # px0/px1은 제목 밴드에서 이미 계산 — 전 좌측 요소가 같은 두 변에 정렬된다.
+    # 칸 안에 밑줄을 긋지 않는다. 예전에는 글씨 자리를 안내하려고 바닥에서 3.5mm 위에
+    # 그었는데, 선호 요일 칸이 들어오며 칸이 7~8mm로 낮아지자 밑줄이 칸의 절반을
+    # 차지해 정작 쓸 자리가 없어졌다. 테두리만으로 쓸 곳은 충분히 보인다.
     def field_box(y0, y1, label, value=""):
         d.rectangle([px0, mm(y0), px1, mm(y1)], outline=_BORDER, width=mm(0.4))
         d.text((px0 + mm(3), mm(y0) + mm(2.2)), label, font=font(9, True), fill=_INK)
-        lx = px0 + mm(24)
-        d.line([lx, mm(y1) - mm(3.5), px1 - mm(4), mm(y1) - mm(3.5)], fill=_BORDER, width=mm(0.3))
         if value:
-            d.text((lx + mm(2), mm(y0) + mm(2.2)), value, font=font(9.5, True), fill=_INK)
+            d.text((px0 + mm(26), mm(y0) + mm(2.2)), value, font=font(9.5, True), fill=_INK)
 
     if cfg.preferred_schedule:
         field_box(mt + 30, mt + 38, "성 명", student.get("name", "") if student else "")
