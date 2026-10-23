@@ -49,6 +49,16 @@ class ReadParams:
     mark_margin: float = 1.35        # 1순위 ≥ mark_abs_min×이 값 → 확실한 표기
     ratio_margin: float = 0.75       # 2순위/1순위 ≤ ambiguous_ratio×이 값 → 확실한 단독
 
+    # --- 수험번호 뒤쪽 빈 자리 ---
+    # 수험번호는 4자리가 기본이고 5자리 그리드의 마지막 열은 비는 일이 많다. 빈 열에도
+    # 인쇄된 숫자 글자·지운 자국·연필 스침으로 채움률이 0.2~0.3까지 오르는데, 그것을
+    # '흐린 마킹일지도 모른다'고 남겨 두면 4자리 학생마다 '2651?'가 되어 사람이 본다.
+    # 같은 답안지에서 학생이 실제로 칠한 자리(채움률 0.85 안팎)에 견줘 이 비율에도
+    # 못 미치는 뒤쪽 자국은 마킹이 아니라 자국으로 보고 잘라낸다. 채움률은 면적
+    # 비율이라 연필이 옅어도 제대로 칠한 자리는 높게 나오므로, 절반에 못 미친다는
+    # 건 버블의 반도 안 덮인 점·획이라는 뜻이다.
+    trailing_faint_ratio: float = 0.5
+
 
 @dataclass
 class BubbleReading:
@@ -289,6 +299,65 @@ def _judge_group(fills: dict, params: ReadParams):
     return best_v, "ok", selected, strong and clear
 
 
+def assemble_student_id(id_columns: dict, params: ReadParams):
+    """자리별 판정({열: GroupResult})을 수험번호 문자열과 검수 플래그로 조립한다.
+
+    왼쪽부터 채워 쓰는 규약이라 뒤쪽 빈 자리는 미기입으로 보고 잘라낸다. 뒤에서부터
+    보며 다음 셋 중 하나면 자른다.
+
+      · 확실한 빈칸
+      · 흐린 자국 — 가장 진한 버블의 채움률이, 이 답안지에서 학생이 확실히 칠한
+        자리들의 채움률(중앙값)의 trailing_faint_ratio에 못 미친다. 마킹이 아니라
+        지운 자국·연필 스침·인쇄 글자다. 무엇이 있었는지는 'id_trailing' 플래그로
+        남겨 화면이 "5번째 칸의 흐린 자국(8)은 무시했다"고 말할 수 있게 한다.
+
+    그 밖의 자리(학생의 마킹에 견줄 만큼 진한 자국, 중복 표기)는 지금처럼 '?'로
+    남겨 사람이 본다 — 5자리 번호의 마지막 자리를 조용히 잘라 다른 학생에게 성적표가
+    가는 일은 없어야 한다. 중간의 빈칸·중복도 '?'다.
+
+    반환: (수험번호 문자열 또는 None, 플래그 목록)
+    """
+    cells = []
+    for col in sorted(id_columns):
+        g = id_columns[col]
+        digit = str(g.chosen) if (g.status == "ok" and g.chosen is not None) else None
+        cells.append((col, digit, g))
+
+    # 이 답안지에서 학생이 실제로 칠한 농도 — 확실히 읽힌 자리의 최고 채움률 중앙값.
+    # 확실한 자리가 없으면 읽힌 자리 전부로 대신한다. 읽힌 자리가 하나도 없으면
+    # 견줄 기준이 없으므로 흐린 자국 규칙은 쓰지 않는다.
+    marks = [max(g.fills.values()) for _, digit, g in cells if digit is not None and g.certain]
+    if not marks:
+        marks = [max(g.fills.values()) for _, digit, g in cells if digit is not None]
+    mark_level = statistics.median(marks) if marks else None
+
+    flags = []
+    while cells:
+        col, digit, g = cells[-1]
+        if g.status == "blank" and g.certain:
+            cells.pop()
+            continue
+        if g.status != "multiple" and mark_level is not None and len(cells) > 1:
+            darkest = max(g.fills, key=g.fills.get)
+            if g.fills[darkest] < mark_level * params.trailing_faint_ratio:
+                flags.append({
+                    "type": "id_trailing", "col": col, "candidate": str(darkest),
+                    "fill": round(g.fills[darkest], 3), "mark_level": round(mark_level, 3),
+                })
+                cells.pop()
+                continue
+        break
+
+    id_digits = ""
+    for col, digit, g in cells:
+        id_digits += digit if digit is not None else "?"
+        if digit is None:  # 중간의 빈칸/중복, 또는 마킹에 견줄 만큼 진한 뒤쪽 자국 — 검수 대상
+            flags.append({"type": "id", "col": col, "status": "review", "certain": False})
+        elif not g.certain:  # 읽기는 했지만 경계에 걸친 자리 — 수험번호는 틀리면 치명적이라 확인
+            flags.append({"type": "id", "col": col, "status": "weak", "certain": False})
+    return (id_digits or None), flags
+
+
 def read_omr(image_path: str, template_path: str, params: ReadParams | None = None,
              debug_out: str | None = None, make_preview: bool = False,
              preview_width: int = 1100, preview_quality: int = 72,
@@ -395,25 +464,12 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     preferred_schedule = judge_field("schedule", SCHEDULE_LABELS, "preferred_schedule")
     enrollment = judge_field("enrollment", ENROLLMENT_LABELS, "enrollment")
 
-    # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸은 미기입으로 간주해 절삭)
-    id_cells = []            # (col, digit or None, blank?)
+    # 자리별 판독 → 왼쪽부터 채워쓰기 규약(뒤쪽 빈 칸·흐린 자국은 미기입으로 보고 절삭)
     for col in sorted(id_groups):
         chosen, status, selected, certain = _judge_group(id_groups[col], params)
         id_columns[col] = GroupResult(col, chosen, status, id_groups[col], selected, certain)
-        digit = str(chosen) if (status == "ok" and chosen is not None) else None
-        id_cells.append((col, digit, status == "blank", certain))
-    # 뒤쪽 연속 빈칸 제거(4~5자리 좌측정렬 대응) — 단, 확실한 빈칸만 잘라낸다.
-    # 흐린 표기를 빈칸으로 오해해 잘라 버리면 수험번호가 조용히 짧아진다.
-    while id_cells and id_cells[-1][2] and id_cells[-1][3]:
-        id_cells.pop()
-    id_digits = ""
-    for col, digit, _blank, certain in id_cells:
-        id_digits += digit if digit is not None else "?"
-        if digit is None:  # 중간의 빈칸/중복은 검수 대상
-            review_flags.append({"type": "id", "col": col, "status": "review", "certain": False})
-        elif not certain:  # 읽기는 했지만 경계에 걸친 자리 — 수험번호는 틀리면 치명적이라 확인
-            review_flags.append({"type": "id", "col": col, "status": "weak", "certain": False})
-    student_id_bubbles = id_digits or None
+    student_id_bubbles, id_flags = assemble_student_id(id_columns, params)
+    review_flags.extend(id_flags)
 
     # 주관식 칸 이미지 — 전사(글자 읽기)에 쓴다. 필요할 때만 만든다.
     essay_crops = _crop_essay_boxes(gray, template, M, Wc, Hc) if make_essay_crops else {}
