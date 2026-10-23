@@ -306,14 +306,16 @@ def assemble_student_id(id_columns: dict, params: ReadParams):
     보며 다음 셋 중 하나면 자른다.
 
       · 확실한 빈칸
-      · 흐린 자국 — 가장 진한 버블의 채움률이, 이 답안지에서 학생이 확실히 칠한
-        자리들의 채움률(중앙값)의 trailing_faint_ratio에 못 미친다. 마킹이 아니라
-        지운 자국·연필 스침·인쇄 글자다. 무엇이 있었는지는 'id_trailing' 플래그로
-        남겨 화면이 "5번째 칸의 흐린 자국(8)은 무시했다"고 말할 수 있게 한다.
+      · 흐린 자국 — 마킹 임계(mark_abs_min)에 못 미치는 빈칸인데 확신이 없고, 가장
+        진한 버블의 채움률이 이 답안지에서 학생이 확실히 칠한 자리들의 채움률
+        (중앙값)의 trailing_faint_ratio에도 못 미친다. 마킹이 아니라 지운 자국·연필
+        스침·인쇄 글자다. 무엇이 있었는지는 'id_trailing' 플래그로 남겨 화면이
+        "5번째 칸의 흐린 자국(8)은 무시했다"고 말할 수 있게 한다.
 
-    그 밖의 자리(학생의 마킹에 견줄 만큼 진한 자국, 중복 표기)는 지금처럼 '?'로
-    남겨 사람이 본다 — 5자리 번호의 마지막 자리를 조용히 잘라 다른 학생에게 성적표가
-    가는 일은 없어야 한다. 중간의 빈칸·중복도 '?'다.
+    마킹 임계를 넘은 자리는 흐려도(weak) 잘라내지 않는다 — 흐리게 칠한 진짜 마지막
+    자리를 조용히 잘라 다른 학생에게 성적표가 가는 일은 없어야 한다. 그런 자리는
+    숫자로 읽되 'weak' 플래그를 남기고, 명부와 맞추는 일은 웹이 한다. 학생의 마킹에
+    견줄 만큼 진한 빈칸 자국, 중복 표기, 중간의 빈칸은 지금처럼 '?'다.
 
     반환: (수험번호 문자열 또는 None, 플래그 목록)
     """
@@ -337,7 +339,7 @@ def assemble_student_id(id_columns: dict, params: ReadParams):
         if g.status == "blank" and g.certain:
             cells.pop()
             continue
-        if g.status != "multiple" and mark_level is not None and len(cells) > 1:
+        if g.status == "blank" and mark_level is not None and len(cells) > 1:
             darkest = max(g.fills, key=g.fills.get)
             if g.fills[darkest] < mark_level * params.trailing_faint_ratio:
                 flags.append({

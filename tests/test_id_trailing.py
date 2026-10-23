@@ -53,12 +53,13 @@ def test_certain_blank_columns_are_still_dropped_silently():
     assert assemble_student_id(cols, ReadParams()) == ("1234", [])
 
 
-def test_small_dark_dot_that_passed_the_mark_threshold_is_still_a_smudge():
-    # 점 하나가 0.30을 넘어 'ok'로 읽혔지만 학생의 마킹(0.85)의 절반에도 못 미친다
+def test_faint_digit_above_the_mark_threshold_is_read_not_cut():
+    # 마킹 임계를 넘은 자리는 흐려도 잘라내지 않는다 — 숫자로 읽고 weak 플래그를 남긴다.
+    # 4614 학생인지 46140 학생인지는 웹이 명부로 정한다(lib/id-resolve).
     cols = _cols(_ok(0, 4), _ok(1, 6), _ok(2, 1), _ok(3, 4), _ok(4, 0, fill=0.36, certain=False))
     sid, flags = assemble_student_id(cols, ReadParams())
-    assert sid == "4614"
-    assert flags == [{"type": "id_trailing", "col": 4, "candidate": "0", "fill": 0.36, "mark_level": 0.85}]
+    assert sid == "46140"
+    assert flags == [{"type": "id", "col": 4, "status": "weak", "certain": False}]
 
 
 def test_a_real_fifth_digit_is_kept_even_when_a_little_lighter():
@@ -120,9 +121,10 @@ def test_scanned_sheet_with_stray_dot_in_empty_fifth_column_reads_four_digits():
     answers = {q: rng.randint(1, 5) for q in range(1, 26)}
     for seed in range(3):
         scan = simulate_marked(cfg, answers, "2651", dpi=200, distort=False, seed=seed)
-        # 버블 반지름의 45% 되는 점 — 면적으로는 버블의 1/5, 마킹(0.85)의 절반에 한참 못 미친다
+        # 버블 반지름의 39% 되는 점 — 인쇄된 '8' 글자와 합쳐 채움률 0.27 안팎이 된다.
+        # 마킹 임계(0.30)에는 못 미치지만 '확실한 빈칸' 선(0.255)은 넘어, 예전에는 '2651?'였다.
         cv2.circle(scan, (mm2px(bubble.x_mm), mm2px(bubble.y_mm)),
-                   int(mm2px(layout.bubble_radius_mm) * 0.45), (40, 40, 40), -1)
+                   int(mm2px(layout.bubble_radius_mm) * 0.39), (40, 40, 40), -1)
         from omr.simulate import _apply_scan_distortion
         scan = _apply_scan_distortion(scan, seed)
         p = os.path.join(d, f"dot{seed}.png")
