@@ -5,6 +5,9 @@ services:
     name: omr-api
     runtime: docker
     plan: starter          # 항상 켜짐(약 $7/월). stateless라 영구 디스크 불필요.
+    # 서울의 Vercel·Supabase와 가장 가까운 Render 리전. 지정하지 않으면 미국 오리건이 기본이라
+    # 답안지 이미지를 받고 결과를 돌려주는 왕복이 태평양을 건넌다. 리전은 만든 뒤 바꿀 수 없다.
+    region: singapore
     healthCheckPath: /health
     envVars:
       - key: APP_MODULE
