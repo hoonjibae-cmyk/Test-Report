@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from .layout import ENROLLMENT_LABELS, SCHEDULE_LABELS
 
@@ -26,6 +27,91 @@ from .layout import ENROLLMENT_LABELS, SCHEDULE_LABELS
 # 버블의 분홍 테두리가 블러·적응 임계를 거치며 안쪽으로 번지므로, 창을 테두리에서
 # 떨어뜨려야 빈 버블의 채움률이 낮게 유지된다.
 SAMPLE_FRACTION = 0.85
+
+# A4 600dpi (~35M pixels) is accepted, but inspect dimensions before OpenCV
+# allocates native buffers. Compressed file size does not bound decoded memory.
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGE_SIDE = 10_000
+QR_MAX_SIDE = 2500
+
+
+def _load_gray(image_path: str) -> np.ndarray:
+    """Preserve the original grayscale pixels, releasing color before detection."""
+    with Image.open(image_path) as header:
+        width, height = header.size
+        if width * height > MAX_IMAGE_PIXELS or max(width, height) > MAX_IMAGE_SIDE:
+            raise ValueError(
+                "스캔 이미지가 너무 큽니다. A4 기준 600dpi 이하로 다시 저장하세요. "
+                f"(최대 {MAX_IMAGE_PIXELS:,}픽셀, 한 변 {MAX_IMAGE_SIDE:,}픽셀)"
+            )
+    image = cv2.imread(image_path)
+    if image is None:
+        raise FileNotFoundError(f"이미지를 열 수 없습니다: {image_path}")
+    # IMREAD_GRAYSCALE can round differently (notably JPEG), which could move
+    # faint marks across a grading threshold. Keep the original conversion;
+    # this function scope releases the color copy before QR/marker detection.
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def _qr_thumbnail(gray: np.ndarray) -> np.ndarray:
+    height, width = gray.shape
+    if max(width, height) > QR_MAX_SIDE:
+        scale = QR_MAX_SIDE / max(width, height)
+        gray = cv2.resize(
+            gray, (max(1, round(width * scale)), max(1, round(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return gray
+
+
+def _qr_tiles(gray: np.ndarray):
+    """Original-resolution overlapping tiles, trying sheet corners first."""
+    height, width = gray.shape
+    step = QR_MAX_SIDE // 2
+    xs = list(range(0, max(1, width - QR_MAX_SIDE + 1), step))
+    ys = list(range(0, max(1, height - QR_MAX_SIDE + 1), step))
+    xs.append(max(0, width - QR_MAX_SIDE))
+    ys.append(max(0, height - QR_MAX_SIDE))
+    locations = [(xs[-1], 0), (0, 0), (xs[-1], ys[-1]), (0, ys[-1])]
+    locations.extend((x, y) for y in ys for x in xs)
+    seen = set()
+    for x, y in locations:
+        if (x, y) not in seen:
+            seen.add((x, y))
+            yield gray[y:y + QR_MAX_SIDE, x:x + QR_MAX_SIDE]
+
+
+def _read_qr(gray: np.ndarray) -> str:
+    """Bound detector buffers without discarding dense QR identity payloads."""
+    thumbnail = _qr_thumbnail(gray)
+    data, points, _ = cv2.QRCodeDetector().detectAndDecode(thumbnail)
+    if data or thumbnail is gray:
+        return data
+    # A small whole-page image can locate a dense QR but lack pixels to decode
+    # it. Retry only its original-resolution rectangle, never the whole scan.
+    if points is not None:
+        corners = points.reshape(-1, 2).astype(np.float64)
+        corners *= [gray.shape[1] / thumbnail.shape[1], gray.shape[0] / thumbnail.shape[0]]
+        low, high = corners.min(axis=0), corners.max(axis=0)
+        margin = np.maximum(8, (high - low) * 0.2)
+        x0, y0 = np.maximum(0, np.floor(low - margin)).astype(int)
+        x1, y1 = np.minimum([gray.shape[1], gray.shape[0]], np.ceil(high + margin)).astype(int)
+        if x1 > x0 and y1 > y0:
+            crop = _qr_thumbnail(gray[y0:y1, x0:x1])
+            data, _, _ = cv2.QRCodeDetector().detectAndDecode(crop)
+            del crop
+            if data:
+                return data
+    del thumbnail
+    # Very dense/small QR codes may disappear even from thumbnail detection.
+    # Try bounded original-resolution tiles rather than losing the identity or
+    # falling back to an unbounded full-frame detector. Overlap keeps ordinary
+    # sheet QR codes intact across tile boundaries and rotations.
+    for tile in _qr_tiles(gray):
+        data, _, _ = cv2.QRCodeDetector().detectAndDecode(tile)
+        if data:
+            return data
+    return ""
 
 
 # 판정 파라미터 (기본값은 스캐너 입력 기준 보수적으로 설정)
@@ -374,17 +460,14 @@ def read_omr(image_path: str, template_path: str, params: ReadParams | None = No
     with open(template_path, encoding="utf-8") as fp:
         template = json.load(fp)
 
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(f"이미지를 열 수 없습니다: {image_path}")
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = _load_gray(image_path)
 
     # QR (원본에서)
     exam_id = None
     student_id_qr = None
     qr_fingerprint = None
     try:
-        data, _, _ = cv2.QRCodeDetector().detectAndDecode(gray)
+        data = _read_qr(gray)
         if data and "|" in data:
             # "시험ID|수험번호" 또는 "시험ID|수험번호|레이아웃지문"(신형)
             parts = data.split("|")

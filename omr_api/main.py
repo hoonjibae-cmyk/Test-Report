@@ -18,8 +18,10 @@ import io
 import json
 import os
 import tempfile
+from contextlib import closing
 
 import anyio
+import cv2
 from fastapi.responses import Response
 from fastapi import FastAPI, Form, File, UploadFile, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,10 +48,10 @@ def _check_key(x_api_key: str | None):
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
 
-# 한 번에 판독할 요청 수. 1을 기본으로 둔 것은 의도한 것이다.
+# 한 번에 이미지/PDF를 처리할 요청 수. 생성과 판독이 같은 슬롯을 쓴다.
 #
-# 판독은 CPU와 메모리를 함께 먹는다. 300dpi 스캔 한 장이 250MB 넘게 쓰므로,
-# 두 요청을 같이 돌리면 작은 요금제(512MB)에서는 프로세스가 통째로 죽는다.
+# 판독은 CPU와 메모리를 함께 먹는다. 큰 스캔과 생성 이미지의 작업 버퍼가
+# 겹치면 작은 요금제(512MB)에서는 프로세스가 통째로 죽을 수 있다.
 # CPU도 요금제에 걸린 만큼만 나눠 쓰는 것이라, 같이 돌린다고 총 처리량이
 # 늘지도 않는다. 여러 선생님이 동시에 올려도 요청 단위로 번갈아 처리된다.
 #
@@ -60,6 +62,39 @@ except ValueError:
     MAX_CONCURRENCY = 1
 
 _read_slots = asyncio.Semaphore(MAX_CONCURRENCY)
+
+# OpenCV 내부 작업 스레드도 각각 버퍼를 잡는다. 작은 인스턴스에서는 요청을
+# 직렬화해도 기본 스레드 수만으로 메모리 상한을 넘길 수 있다.
+try:
+    OPENCV_THREADS = max(1, int(os.environ.get("OMR_OPENCV_THREADS", "1")))
+except ValueError:
+    OPENCV_THREADS = 1
+cv2.setNumThreads(OPENCV_THREADS)
+
+# A4 300dpi(약 870만 픽셀)보다 여유 있게 두되, 비정상적으로 큰 PDF 페이지를
+# 래스터화하기 전에 거른다. 작은 요금제에서 픽스맵 하나가 메모리를 소진할 수 있다.
+MAX_PDF_PAGE_PIXELS = 12_000_000
+MAX_PREVIEW_DPI = 300
+
+
+async def _run_image_work(func, *args):
+    async with _read_slots:
+        worker = asyncio.create_task(anyio.to_thread.run_sync(func, *args))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # asyncio.Task.cancel()로 요청이 취소되어도 실행 중인 스레드는 멈추지
+            # 않는다. 작업이 끝날 때까지 슬롯과 호출자의 임시 폴더를 유지한다.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                worker.exception()  # 취소 중 발생한 예외도 회수한다.
+            raise
 
 
 class SheetSpec(BaseModel):
@@ -92,14 +127,20 @@ def health():
         "ok": True,
         "service": "omr-api",
         "auth": bool(API_KEY),
-        "version": "2026-10-23.1",
+        "version": "2026-11-04.1",
         "pdf": pdf_ok,
         "max_concurrency": MAX_CONCURRENCY,
+        "opencv_threads": OPENCV_THREADS,
     }
 
 
 @app.post("/preview")
-def preview_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None)):
+async def preview_endpoint(spec: SheetSpec, x_api_key: str | None = Header(default=None)):
+    _check_key(x_api_key)
+    return await _run_image_work(preview_sheet, spec, x_api_key)
+
+
+def preview_sheet(spec: SheetSpec, x_api_key: str | None = None):
     """설정만 보고 답안지 한 장을 PNG로 그려 돌려준다 — 시험을 만들기 전 미리보기.
 
     /generate 와 같은 코드로 그린다. 미리보기가 실제 답안지와 조금이라도 다르면
@@ -123,15 +164,26 @@ def preview_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None))
     except ValueError as e:
         # 설정이 종이에 안 맞는 경우 — 화면이 그대로 보여 줄 수 있는 안내문
         raise HTTPException(status_code=422, detail=str(e))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return Response(content=buf.getvalue(), media_type="image/png",
-                    headers={"Cache-Control": "private, max-age=3600"})
+    try:
+        with io.BytesIO() as buf:
+            img.save(buf, format="PNG", optimize=True)
+            return Response(content=buf.getvalue(), media_type="image/png",
+                            headers={"Cache-Control": "private, max-age=3600"})
+    finally:
+        img.close()
 
 @app.post("/generate")
-def generate_sheet(spec: SheetSpec, x_api_key: str | None = Header(default=None)):
+async def generate_endpoint(spec: SheetSpec, x_api_key: str | None = Header(default=None)):
+    _check_key(x_api_key)
+    return await _run_image_work(generate_sheet, spec, x_api_key)
+
+
+def generate_sheet(spec: SheetSpec, x_api_key: str | None = None):
     """답안지 PDF + 판독 템플릿을 생성해 반환한다(디스크 미저장)."""
     _check_key(x_api_key)
+    if spec.include_preview and not 50 <= spec.dpi <= MAX_PREVIEW_DPI:
+        raise HTTPException(status_code=422,
+                            detail=f"미리보기 해상도는 50~{MAX_PREVIEW_DPI}dpi 범위여야 합니다.")
     cfg = SheetConfig(
         exam_id=spec.exam_id, title=spec.title, num_questions=spec.num_questions,
         num_choices=spec.num_choices, id_digits=spec.id_digits,
@@ -210,8 +262,11 @@ async def read_scans(
         for f in files:
             if not f.filename:
                 continue
-            raw_path = os.path.join(d, os.path.basename(f.filename))
-            with open(raw_path, "wb") as out:
+            # 같은 이름의 스캔도 별개 파일이다. 업로드 이름으로 저장하면 앞선
+            # 스캔이나 template.json을 덮어쓸 수 있으므로 임의 경로를 쓴다.
+            suffix = os.path.splitext(os.path.basename(f.filename))[1]
+            fd, raw_path = tempfile.mkstemp(prefix="omr_upload_", suffix=suffix, dir=d)
+            with os.fdopen(fd, "wb") as out:
                 while chunk := await f.read(1024 * 1024):
                     out.write(chunk)
             saved.append((f.filename, raw_path))
@@ -219,11 +274,10 @@ async def read_scans(
         # 판독은 CPU를 오래 붙잡는 작업이라 이벤트 루프에서 돌리면 안 된다.
         # 그 사이 서버는 /health 에도 답하지 못하고, 배포 플랫폼은 그것을
         # '죽은 서버'로 읽어 판독 도중에 인스턴스를 재시작해 버린다.
-        async with _read_slots:
-            results, problems = await anyio.to_thread.run_sync(
-                _read_all, saved, d, tpl_path, params,
-                include_preview, include_essay_crops, template,
-            )
+        results, problems = await _run_image_work(
+            _read_all, saved, d, tpl_path, params,
+            include_preview, include_essay_crops, template,
+        )
     return {"results": results, "problems": problems}
 
 
@@ -236,80 +290,100 @@ def _read_all(saved, work_dir, tpl_path, params, include_preview,
     """
     expected_layout = json.loads(template).get("layout_fingerprint")
     results, problems = [], []
-    for filename, raw_path in saved:
-        # PDF는 페이지별 이미지로 풀어 각 페이지를 답안지 1장으로 판독한다.
-        # 페이지 파일명은 "원본.pdf#p1" 형식 — 호출 측이 원본과 매핑할 수 있다.
-        if filename.lower().endswith(".pdf"):
-            try:
-                pages = _expand_pdf_pages(raw_path, work_dir)
-            except Exception as e:
-                problems.append({"filename": filename, "error": f"PDF를 열지 못했습니다: {e}"})
-                continue
-            if not pages:
-                problems.append({"filename": filename, "error": "PDF에 페이지가 없습니다."})
-                continue
-            targets = [(f"{filename}#p{i + 1}", p) for i, (_, p) in enumerate(pages)]
-        else:
-            targets = [(filename, raw_path)]
+    def read_target(name, img_path):
+        try:
+            r = read_omr(img_path, tpl_path, params=params,
+                         make_preview=include_preview,
+                         make_essay_crops=include_essay_crops)
+        except Exception as e:
+            problems.append({"filename": name, "error": str(e)})
+            return
+        results.append({
+            "filename": name,
+            "student_id": r.resolved_student_id(),
+            "student_id_qr": r.student_id_qr,
+            "student_id_bubbles": r.student_id_bubbles,
+            "preferred_schedule": r.preferred_schedule,
+            "enrollment": r.enrollment,
+            "exam_id": r.exam_id,
+            # 답안지 QR의 레이아웃 지문 vs 이번 판독에 쓴 설정의 지문
+            "sheet_layout": r.layout_fingerprint,
+            "expected_layout": expected_layout,
+            "answers": {str(q): v for q, v in r.answers().items()},
+            # '모두 고르기' 문항 대응: 칠해진 보기를 전부 담는다.
+            "selections": {str(q): v for q, v in r.selections().items()},
+            "review_flags": r.review_flags,
+            # 자동 검수 통과 판단용 — 경계에 걸친 것만 추린다.
+            # (확실한 미표기는 여기 들어가지 않는다: 학생이 안 푼 문항이다)
+            "uncertain_questions": r.uncertain_questions(),
+            "multi_marked_questions": r.multi_marked_questions(),
+            "id_uncertain": any(
+                flag.get("type") == "id" for flag in r.review_flags
+            ),
+            "id_conflict": r.id_conflict(),
+        })
+        if include_preview and r.preview_jpeg:
+            # 판독기가 실제로 본 이미지(원근 보정 + 판정 표시)
+            results[-1]["preview_jpeg_base64"] = base64.b64encode(
+                r.preview_jpeg).decode("ascii")
+        if include_essay_crops and r.essay_crops:
+            # 주관식 손기입 칸을 반듯하게 편 이미지 — 전사(글자 읽기)에 쓴다
+            results[-1]["essay_crops_base64"] = {
+                str(num): base64.b64encode(jpg).decode("ascii")
+                for num, jpg in r.essay_crops.items()
+            }
 
-        for name, img_path in targets:
-            try:
-                r = read_omr(img_path, tpl_path, params=params,
-                             make_preview=include_preview,
-                             make_essay_crops=include_essay_crops)
-            except Exception as e:
-                problems.append({"filename": name, "error": str(e)})
-                continue
-            results.append({
-                "filename": name,
-                "student_id": r.resolved_student_id(),
-                "student_id_qr": r.student_id_qr,
-                "student_id_bubbles": r.student_id_bubbles,
-                "preferred_schedule": r.preferred_schedule,
-                "enrollment": r.enrollment,
-                "exam_id": r.exam_id,
-                # 답안지 QR의 레이아웃 지문 vs 이번 판독에 쓴 설정의 지문
-                "sheet_layout": r.layout_fingerprint,
-                "expected_layout": expected_layout,
-                "answers": {str(q): v for q, v in r.answers().items()},
-                # '모두 고르기' 문항 대응: 칠해진 보기를 전부 담는다.
-                "selections": {str(q): v for q, v in r.selections().items()},
-                "review_flags": r.review_flags,
-                # 자동 검수 통과 판단용 — 경계에 걸친 것만 추린다.
-                # (확실한 미표기는 여기 들어가지 않는다: 학생이 안 푼 문항이다)
-                "uncertain_questions": r.uncertain_questions(),
-                "multi_marked_questions": r.multi_marked_questions(),
-                "id_uncertain": any(
-                    flag.get("type") == "id" for flag in r.review_flags
-                ),
-                "id_conflict": r.id_conflict(),
-            })
-            if include_preview and r.preview_jpeg:
-                # 판독기가 실제로 본 이미지(원근 보정 + 판정 표시)
-                results[-1]["preview_jpeg_base64"] = base64.b64encode(
-                    r.preview_jpeg).decode("ascii")
-            if include_essay_crops and r.essay_crops:
-                # 주관식 손기입 칸을 반듯하게 편 이미지 — 전사(글자 읽기)에 쓴다
-                results[-1]["essay_crops_base64"] = {
-                    str(num): base64.b64encode(jpg).decode("ascii")
-                    for num, jpg in r.essay_crops.items()
-                }
+    for filename, raw_path in saved:
+        if not filename.lower().endswith(".pdf"):
+            read_target(filename, raw_path)
+            continue
+        # PDF 한 페이지만 펼친 뒤 바로 판독한다. 다음 장을 만들기 전에 PNG와
+        # 픽스맵을 해제하여 페이지 수만큼 이미지가 쌓이지 않게 한다.
+        try:
+            with closing(_expand_pdf_pages(raw_path, work_dir)) as pages:
+                for page_number, img_path in pages:
+                    read_target(f"{filename}#p{page_number}", img_path)
+        except Exception as e:
+            problems.append({"filename": filename, "error": f"PDF를 처리하지 못했습니다: {e}"})
     return results, problems
 
 
 def _expand_pdf_pages(pdf_path: str, out_dir: str, dpi: int = 200, max_pages: int = 100):
-    """PDF의 각 페이지를 판독용 PNG로 렌더링해 (페이지번호, 경로) 목록을 반환."""
+    """PDF 페이지를 하나씩 펼친다. 각 PNG는 다음 페이지로 넘어갈 때 지운다."""
     import pymupdf
 
-    pages = []
     with pymupdf.open(pdf_path) as doc:
-        count = min(doc.page_count, max_pages)
-        zoom = dpi / 72.0
-        matrix = pymupdf.Matrix(zoom, zoom)
-        base = os.path.splitext(os.path.basename(pdf_path))[0]
-        for i in range(count):
-            pix = doc[i].get_pixmap(matrix=matrix, colorspace=pymupdf.csRGB)
-            page_path = os.path.join(out_dir, f"{base}__page{i + 1}.png")
-            pix.save(page_path)
-            pages.append((i + 1, page_path))
-    return pages
+        if not doc.page_count:
+            raise ValueError("PDF에 페이지가 없습니다.")
+        if doc.page_count > max_pages:
+            raise ValueError(
+                f"PDF는 한 번에 {max_pages}페이지까지 처리할 수 있습니다. "
+                f"현재 {doc.page_count}페이지이므로 파일을 나누어 올려 주세요."
+            )
+        matrix = pymupdf.Matrix(dpi / 72.0, dpi / 72.0)
+        # 모든 페이지를 먼저 확인한다. 뒤쪽의 비정상 페이지 때문에 앞쪽 답안만
+        # 처리된 정상 응답처럼 보이거나, 거대한 픽스맵이 생성되는 일을 막는다.
+        for page in doc:
+            bounds = (page.rect * matrix).irect
+            if (bounds.width <= 0 or bounds.height <= 0 or
+                    bounds.width * bounds.height > MAX_PDF_PAGE_PIXELS):
+                raise ValueError(
+                    f"PDF {page.number + 1}페이지의 이미지 크기가 너무 큽니다. "
+                    "A4 크기로 저장한 PDF를 올려 주세요."
+                )
+        for i in range(doc.page_count):
+            fd, page_path = tempfile.mkstemp(prefix="omr_page_", suffix=".png", dir=out_dir)
+            os.close(fd)
+            try:
+                pix = doc[i].get_pixmap(matrix=matrix, colorspace=pymupdf.csRGB,
+                                        alpha=False)
+                try:
+                    pix.save(page_path)
+                finally:
+                    # yield 동안 픽스맵을 잡고 있으면 판독 이미지와 겹쳐 존재한다.
+                    del pix
+                    pymupdf.TOOLS.store_shrink(100)
+                yield i + 1, page_path
+            finally:
+                if os.path.exists(page_path):
+                    os.remove(page_path)
